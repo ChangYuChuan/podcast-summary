@@ -31,6 +31,7 @@ DEFAULT_CONFIG = Path.home() / ".config" / "psum" / "config.yaml"
 
 CRON_MARKER_PREFIX = "# psum:"
 DEFAULT_JOB_NAME   = "default"
+PSUM_CONFIG_DIR    = Path.home() / ".config" / "psum"
 
 
 # ─── Internal helpers ────────────────────────────────────────────────────────
@@ -105,6 +106,34 @@ def _write_zprofile_var(var_name: str, value: str) -> None:
         content += "\n"
     content += new_line + "\n"
     zprofile.write_text(content, encoding="utf-8")
+
+
+def _list_config_files() -> list[Path]:
+    """Return all .yaml files in the psum config directory, sorted by name."""
+    if not PSUM_CONFIG_DIR.exists():
+        return []
+    return sorted(PSUM_CONFIG_DIR.glob("*.yaml"))
+
+
+def _pick_config(current: Path) -> Path:
+    """If the user is using the default config and multiple configs exist,
+    prompt them to select one interactively."""
+    if current != DEFAULT_CONFIG:
+        return current  # user explicitly passed --config, respect it
+    configs = _list_config_files()
+    if len(configs) <= 1:
+        return current
+    click.echo("Available configs:\n")
+    for i, c in enumerate(configs, 1):
+        marker = "  ← default" if c == DEFAULT_CONFIG else ""
+        click.echo(f"  {i}. {c.name}{marker}")
+    click.echo()
+    choice = click.prompt(
+        "Select config",
+        type=click.IntRange(1, len(configs)),
+        default=1,
+    )
+    return configs[choice - 1]
 
 
 def _install_cron_job(schedule: str, config_path: Path, name: str) -> None:
@@ -504,14 +533,19 @@ def cron():
 def cron_install(ctx, schedule, name):
     """Install (or update) a named pipeline cron job.
 
-    Each job is identified by --name and points to the config specified via
-    the global --config option. This lets you run multiple independent
-    pipelines on different schedules from different configs.
+    Each job is identified by --name and points to a config file.
+    If multiple configs exist and --config is not specified,
+    you will be prompted to select one.
 
     Example — install a second job for a different config:
-      psum --config ~/configs/tech.yaml cron install --name tech-pods --schedule "0 9 * * 0"
+      psum cron install --name tech-pods --schedule "0 9 * * 0"
+      (then select the config interactively)
     """
-    config_path = ctx.obj["config"]
+    config_path = _pick_config(ctx.obj["config"])
+    if not config_path.exists():
+        click.echo(f"Config file not found: {config_path}")
+        click.echo("Run 'psum init' to create one.")
+        return
     lines = _get_crontab()
     idx = _find_cron_idx(lines, name)
     if idx is not None:
@@ -564,17 +598,36 @@ def config_cmd():
     pass
 
 
+@config_cmd.command("list")
+def config_list():
+    """List all available config files in ~/.config/psum/."""
+    configs = _list_config_files()
+    if not configs:
+        click.echo(f"No config files found in {PSUM_CONFIG_DIR}")
+        click.echo("Run 'psum init' to create one.")
+        return
+    click.echo(f"Configs in {PSUM_CONFIG_DIR}:\n")
+    for c in configs:
+        marker = "  ← default" if c == DEFAULT_CONFIG else ""
+        click.echo(f"  {c.name}{marker}")
+
+
 @config_cmd.command("show")
 @click.pass_context
 def config_show(ctx):
-    """Display current configuration (passwords redacted)."""
-    config_path = ctx.obj["config"]
+    """Display a configuration file (passwords redacted).
+
+    If multiple configs exist and --config is not specified,
+    you will be prompted to select one.
+    """
+    config_path = _pick_config(ctx.obj["config"])
     if not config_path.exists():
         click.echo(f"Config file not found: {config_path}")
         click.echo("Run 'psum init' to create it.")
         return
     from config_manager import load_config
     import yaml
+    click.echo(f"# {config_path}\n")
     cfg = load_config(config_path)
     # Redact smtp_password
     if cfg.get("email", {}).get("smtp_password"):
