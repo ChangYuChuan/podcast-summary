@@ -1,6 +1,6 @@
 {
   "name": "podcast-summary",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Podcast summary pipeline — CLI and MCP server",
   "bin": {
     "psum": "bin/psum.js",
