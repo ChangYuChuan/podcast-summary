@@ -394,7 +394,7 @@ def validate_report(summary: str) -> None:
 
 def save_report(config: dict, folder_name: str, body: str) -> Path:
     """Save the report text to disk and return the file path."""
-    report_dir = Path(config["parent_folder"]) / "reports" / folder_name
+    report_dir = Path(config["source_folder"]) / "reports" / folder_name
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"weekly_report_{folder_name}.txt"
     report_path.write_text(body, encoding="utf-8")

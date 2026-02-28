@@ -170,179 +170,287 @@ def main(ctx, config):
 
 # ─── Shared config wizard ─────────────────────────────────────────────────────
 
-def _run_config_wizard(config_path: Path) -> None:
-    """Walk through all config settings interactively and save the result."""
-    cfg = _load_cfg(config_path)
+WIZARD_SECTIONS = [
+    ("paths",     "Project & data paths"),
+    ("feeds",     "Podcast feeds"),
+    ("nlm",       "NotebookLM"),
+    ("email",     "Email & SMTP"),
+    ("retention", "Retention settings"),
+    ("prompts",   "Report sections"),
+]
 
-    # Project root (where pipeline.py and venv/ live)
-    cwd = Path.cwd()
-    saved_root = cfg.get("project_root", "")
-    if (cwd / "pipeline.py").exists():
-        suggested_root = str(cwd)
-    elif saved_root and (Path(saved_root) / "pipeline.py").exists():
-        suggested_root = saved_root
-    elif (PROJECT_ROOT / "pipeline.py").exists():
-        suggested_root = str(PROJECT_ROOT)
-    else:
-        suggested_root = saved_root or ""
-    project_root_input = click.prompt("Project root [required]", default=suggested_root)
-    project_root_path = Path(project_root_input).expanduser().resolve()
-    if not (project_root_path / "pipeline.py").exists():
-        click.echo(f"  ! pipeline.py not found in {project_root_path} — fix this before running the pipeline")
-    else:
-        click.echo(f"  ✓ pipeline.py found at {project_root_path}")
 
-    # Parent folder
-    default_folder = cfg.get("parent_folder", str(Path.home() / "psum-data"))
-    parent_folder = click.prompt("Data folder path [required]", default=default_folder)
+def _prompt_or_skip(label: str, current: str, **kwargs) -> str:
+    """Show current value as a numbered selection; return it unchanged or prompt for new."""
+    if current:
+        click.echo(f"\n  {label}")
+        click.echo(f"    1. Keep current: {current}")
+        click.echo(f"    2. Change")
+        choice = click.prompt("  Selection", type=click.IntRange(1, 2), default=1)
+        if choice == 1:
+            return current
+    return click.prompt(f"  New {label.lower()}", default=current or "", **kwargs)
 
-    # nlm
-    nlm_path_expanded = cfg.get("nlm_path", "")
-    if nlm_path_expanded and Path(nlm_path_expanded).exists():
-        click.echo(f"  ✓ nlm found at {nlm_path_expanded}")
-        auth_ok = subprocess.run(
-            [nlm_path_expanded, "login", "--check"],
-            capture_output=True,
-        ).returncode == 0
-        if auth_ok:
-            click.echo("  ✓ nlm already authenticated")
-        elif click.confirm("  Log in to NotebookLM now? [optional — needed for upload stage]", default=True):
-            subprocess.run([nlm_path_expanded, "login"], check=False)
-    else:
-        click.echo("  ! nlm not found — run: psum config set nlm_path /path/to/nlm")
-        click.echo("    (or reinstall: npm install -g podcast-summary)")
 
-    # SMTP password → ~/.zprofile (optional)
-    existing_password = os.environ.get("EMAIL_SMTP_PASSWORD", "")
-    if existing_password:
-        click.echo("\n  EMAIL_SMTP_PASSWORD is already set in environment.")
-        change_pw = click.confirm("  Update it?", default=False)
-        if change_pw:
-            smtp_password = click.prompt(
-                "Gmail App Password [optional, saved to ~/.zprofile]", hide_input=True
-            )
-            _write_zprofile_var("EMAIL_SMTP_PASSWORD", smtp_password)
-            click.echo("  ✓ Saved to ~/.zprofile")
-        else:
-            smtp_password = existing_password
-    else:
-        set_pw = click.confirm(
-            "\nSet Gmail App Password now? [optional — needed for the email stage]", default=False
-        )
-        if set_pw:
-            smtp_password = click.prompt(
-                "Gmail App Password (saved to ~/.zprofile)", hide_input=True
-            )
-            _write_zprofile_var("EMAIL_SMTP_PASSWORD", smtp_password)
-            click.echo("  ✓ Saved to ~/.zprofile")
-        else:
-            smtp_password = ""
-            click.echo("  Skipped — set EMAIL_SMTP_PASSWORD in ~/.zprofile before using the email stage.")
+def _section_summary(cfg: dict) -> dict[str, str]:
+    """Return a one-line summary string for each wizard section."""
+    feeds = cfg.get("feeds", [])
+    ret   = cfg.get("retention", {})
+    secs  = cfg.get("report_sections", [])
+    to    = cfg.get("email", {}).get("to", "")
+    to_str = ", ".join(to) if isinstance(to, list) else to
+    return {
+        "paths":     cfg.get("project_root", "") or "(not set)",
+        "feeds":     f"{len(feeds)} feed(s)" if feeds else "(none)",
+        "nlm":       cfg.get("nlm_path", "") or "(not set)",
+        "email":     f"{cfg.get('email',{}).get('from','')} → {to_str}" if to_str else "(not set)",
+        "retention": (
+            f"audio {ret.get('audio_months','?')}mo · "
+            f"transcripts {ret.get('transcripts_months','?')}mo · "
+            f"reports {ret.get('reports_months','?')}mo"
+        ) if ret else "(defaults)",
+        "prompts":   f"{len(secs)} custom section(s)" if secs else "built-in defaults",
+    }
 
-    # Sender email
-    default_from = cfg.get("email", {}).get("from", "")
-    from_email = click.prompt("\nSender email (Gmail address) [required]", default=default_from)
 
-    # Recipient email(s)
-    existing_to = cfg.get("email", {}).get("to", "")
-    if isinstance(existing_to, list):
-        default_to = ", ".join(existing_to)
-    else:
-        default_to = existing_to or ""
-    to_raw = click.prompt(
-        "Recipient email(s), comma-separated [required]", default=default_to
-    )
-    to_list = [e.strip() for e in to_raw.split(",") if e.strip()]
-    to_value = to_list if len(to_list) > 1 else (to_list[0] if to_list else "")
-
-    # Test SMTP connection (optional)
-    if smtp_password and click.confirm("\nTest SMTP connection now?", default=True):
-        try:
-            smtp_host = cfg.get("email", {}).get("smtp_host", "smtp.gmail.com")
-            smtp_port = int(cfg.get("email", {}).get("smtp_port", 587))
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as smtp:
-                smtp.ehlo()
-                smtp.starttls()
-                smtp.login(from_email, smtp_password)
-            click.echo("  ✓ SMTP connection successful!")
-        except Exception as exc:
-            click.echo(f"  ✗ SMTP test failed: {exc}")
-
-    # Retention settings
-    click.echo("\n--- Retention Settings [optional, press Enter to keep defaults] ---")
-    retention = cfg.get("retention", {})
-    audio_months = click.prompt(
-        "Keep audio files for (months, 0 = never delete)",
-        default=retention.get("audio_months", 3),
-        type=int,
-    )
-    transcripts_months = click.prompt(
-        "Keep transcripts for (months, 0 = never delete)",
-        default=retention.get("transcripts_months", 0),
-        type=int,
-    )
-    reports_months = click.prompt(
-        "Keep reports for (months, 0 = never delete)",
-        default=retention.get("reports_months", 0),
-        type=int,
-    )
-
-    # Report sections (prompts)
-    click.echo("\n--- Report Sections (prompts sent to NotebookLM) ---")
-    existing_sections = cfg.get("report_sections", [])
-    if existing_sections:
-        click.echo(f"  Current sections ({len(existing_sections)}):")
-        for i, s in enumerate(existing_sections, 1):
-            click.echo(f"    {i}. {s['title']}")
-    else:
-        click.echo("  Currently using built-in defaults.")
+def _pick_wizard_sections(cfg: dict) -> set[str]:
+    """Show a section menu with current-value summaries; return chosen section keys."""
+    summaries = _section_summary(cfg)
+    click.echo("Which sections would you like to edit?\n")
+    click.echo("  0. All")
+    for i, (key, label) in enumerate(WIZARD_SECTIONS, 1):
+        click.echo(f"  {i}. {label:<26} [{summaries[key]}]")
     click.echo()
+    raw = click.prompt("Enter number(s), comma-separated (or 0 for all)", default="0")
+    if raw.strip() == "0":
+        return {key for key, _ in WIZARD_SECTIONS}
+    chosen = set()
+    for part in raw.split(","):
+        try:
+            idx = int(part.strip()) - 1
+            if 0 <= idx < len(WIZARD_SECTIONS):
+                chosen.add(WIZARD_SECTIONS[idx][0])
+        except ValueError:
+            pass
+    return chosen or {key for key, _ in WIZARD_SECTIONS}
 
-    if click.confirm("  Configure custom report sections?", default=bool(existing_sections)):
-        sections: list[dict] = []
-        click.echo("  Enter sections one by one. Leave title blank to finish.\n")
+
+def _run_config_wizard(config_path: Path, sections: Optional[set[str]] = None) -> None:
+    """Walk through config settings interactively and save the result.
+
+    If `sections` is None, all sections are run (used for new configs).
+    Otherwise only the specified section keys are prompted.
+    """
+    cfg = _load_cfg(config_path)
+    active = sections if sections is not None else {key for key, _ in WIZARD_SECTIONS}
+
+    # ── paths ──────────────────────────────────────────────────────────────────
+    if "paths" in active:
+        click.echo("\n--- Project & Data Paths ---")
+        cwd = Path.cwd()
+        saved_root = cfg.get("project_root", "")
+        if (cwd / "pipeline.py").exists():
+            suggested_root = str(cwd)
+        elif saved_root and (Path(saved_root) / "pipeline.py").exists():
+            suggested_root = saved_root
+        elif (PROJECT_ROOT / "pipeline.py").exists():
+            suggested_root = str(PROJECT_ROOT)
+        else:
+            suggested_root = saved_root or ""
+        project_root_input = _prompt_or_skip("Project root", suggested_root)
+        project_root_path = Path(project_root_input).expanduser().resolve()
+        if not (project_root_path / "pipeline.py").exists():
+            click.echo(f"  ! pipeline.py not found in {project_root_path}")
+        else:
+            click.echo(f"  ✓ pipeline.py found at {project_root_path}")
+
+        default_folder = cfg.get("source_folder", str(Path.home() / "psum-data"))
+        source_folder = _prompt_or_skip("Data folder path", default_folder)
+
+        cfg["project_root"] = str(project_root_path)
+        cfg["source_folder"] = source_folder
+
+    # ── feeds ──────────────────────────────────────────────────────────────────
+    if "feeds" in active:
+        click.echo("\n--- Podcast Feeds ---")
+        existing_feeds = cfg.get("feeds", [])
+        if existing_feeds:
+            click.echo(f"  Current feeds ({len(existing_feeds)}):")
+            for i, f in enumerate(existing_feeds, 1):
+                click.echo(f"    {i}. {f['name']}  {f['url']}")
+            feeds = list(existing_feeds) if click.confirm("  Keep existing feeds?", default=True) else []
+        else:
+            click.echo("  No feeds configured yet.")
+            feeds = []
+
+        click.echo("  Add feeds one by one. Leave name blank to finish.\n")
         while True:
-            title = click.prompt(f"  Section {len(sections) + 1} title", default="").strip()
-            if not title:
+            name = click.prompt(f"  Feed {len(feeds) + 1} name", default="").strip()
+            if not name:
                 break
-            prompt_text = click.prompt(f"  Section {len(sections) + 1} prompt").strip()
-            sections.append({"title": title, "prompt": prompt_text})
+            url = click.prompt(f"  Feed {len(feeds) + 1} URL").strip()
+            feeds.append({"name": name, "url": url})
             click.echo()
-        if sections:
-            cfg["report_sections"] = sections
-            click.echo(f"  ✓ {len(sections)} section(s) configured.")
+
+        if feeds:
+            click.echo(f"  ✓ {len(feeds)} feed(s) configured.")
+        else:
+            click.echo("  No feeds — add later with: psum podcast add <name> <url>")
+        cfg["feeds"] = feeds
+
+    # ── nlm ────────────────────────────────────────────────────────────────────
+    if "nlm" in active:
+        click.echo("\n--- NotebookLM ---")
+        nlm_path_expanded = cfg.get("nlm_path", "")
+        if nlm_path_expanded and Path(nlm_path_expanded).exists():
+            click.echo(f"  ✓ nlm found at {nlm_path_expanded}")
+            auth_ok = subprocess.run(
+                [nlm_path_expanded, "login", "--check"], capture_output=True,
+            ).returncode == 0
+            if auth_ok:
+                click.echo("  ✓ nlm already authenticated")
+            elif click.confirm("  Log in to NotebookLM now?", default=True):
+                subprocess.run([nlm_path_expanded, "login"], check=False)
+        else:
+            click.echo("  ! nlm not found — run: psum config set nlm_path /path/to/nlm")
+
+    # ── email ──────────────────────────────────────────────────────────────────
+    if "email" in active:
+        click.echo("\n--- Email & SMTP ---")
+        email_cfg = dict(cfg.get("email", {}))
+
+        # SMTP password
+        existing_password = os.environ.get("EMAIL_SMTP_PASSWORD", "")
+        if existing_password:
+            click.echo("  EMAIL_SMTP_PASSWORD is already set in environment.")
+            if click.confirm("  Update it?", default=False):
+                pw = click.prompt("Gmail App Password (saved to ~/.zprofile)", hide_input=True)
+                _write_zprofile_var("EMAIL_SMTP_PASSWORD", pw)
+                click.echo("  ✓ Saved to ~/.zprofile")
+                smtp_password = pw
+            else:
+                smtp_password = existing_password
+        else:
+            if click.confirm("Set Gmail App Password now? [needed for email stage]", default=False):
+                smtp_password = click.prompt(
+                    "Gmail App Password (saved to ~/.zprofile)", hide_input=True
+                )
+                _write_zprofile_var("EMAIL_SMTP_PASSWORD", smtp_password)
+                click.echo("  ✓ Saved to ~/.zprofile")
+            else:
+                smtp_password = ""
+                click.echo("  Skipped — set EMAIL_SMTP_PASSWORD in ~/.zprofile before using the email stage.")
+
+        # Sender
+        from_email = _prompt_or_skip("Sender email (Gmail address)", email_cfg.get("from", ""))
+
+        # Recipients — show existing, then enter one per line
+        existing_to = email_cfg.get("to", "")
+        existing_list = existing_to if isinstance(existing_to, list) else ([existing_to] if existing_to else [])
+        if existing_list:
+            click.echo(f"  Current recipients ({len(existing_list)}):")
+            for addr in existing_list:
+                click.echo(f"    • {addr}")
+            recipients = list(existing_list) if click.confirm("  Keep existing recipients?", default=True) else []
+        else:
+            recipients = []
+
+        click.echo("  Add recipients one by one. Leave blank to finish.\n")
+        while True:
+            addr = click.prompt(f"  Recipient {len(recipients) + 1} email", default="").strip()
+            if not addr:
+                break
+            if addr in recipients:
+                click.echo(f"    (already in list, skipping)")
+            else:
+                recipients.append(addr)
+        click.echo(f"  ✓ {len(recipients)} recipient(s): {', '.join(recipients)}" if recipients else "  No recipients configured.")
+
+        # SMTP test
+        if smtp_password and click.confirm("\nTest SMTP connection now?", default=True):
+            try:
+                smtp_host = email_cfg.get("smtp_host", "smtp.gmail.com")
+                smtp_port = int(email_cfg.get("smtp_port", 587))
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as smtp:
+                    smtp.ehlo(); smtp.starttls(); smtp.login(from_email, smtp_password)
+                click.echo("  ✓ SMTP connection successful!")
+            except Exception as exc:
+                click.echo(f"  ✗ SMTP test failed: {exc}")
+
+        to_value = recipients if len(recipients) > 1 else (recipients[0] if recipients else "")
+        email_cfg.update({
+            "to": to_value,
+            "from": from_email,
+            "smtp_host": email_cfg.get("smtp_host", "smtp.gmail.com"),
+            "smtp_port": email_cfg.get("smtp_port", 587),
+            "smtp_user": from_email,
+            "smtp_password": "",
+        })
+        cfg["email"] = email_cfg
+
+    # ── retention ──────────────────────────────────────────────────────────────
+    if "retention" in active:
+        click.echo("\n--- Retention Settings (0 = keep forever) ---")
+        retention = cfg.get("retention", {})
+        cfg["retention"] = {
+            "audio_months": click.prompt(
+                "Keep audio files for (months)", default=retention.get("audio_months", 3), type=int,
+            ),
+            "transcripts_months": click.prompt(
+                "Keep transcripts for (months)", default=retention.get("transcripts_months", 0), type=int,
+            ),
+            "reports_months": click.prompt(
+                "Keep reports for (months)", default=retention.get("reports_months", 0), type=int,
+            ),
+        }
+
+    # ── prompts ────────────────────────────────────────────────────────────────
+    if "prompts" in active:
+        click.echo("\n--- Report Sections (prompts sent to NotebookLM) ---")
+        existing_sections = cfg.get("report_sections", [])
+        if existing_sections:
+            click.echo(f"  Current sections ({len(existing_sections)}):")
+            for i, s in enumerate(existing_sections, 1):
+                click.echo(f"    {i}. {s['title']}")
+        else:
+            click.echo("  Currently using built-in defaults.")
+        click.echo()
+
+        if existing_sections:
+            click.echo("  1. Keep current sections")
+            click.echo("  2. Configure new sections")
+            click.echo("  3. Clear (use built-in defaults)")
+            choice = click.prompt("  Choice", type=click.IntRange(1, 3), default=1)
+        else:
+            choice = 2 if click.confirm("  Configure custom report sections?", default=False) else 1
+
+        if choice == 1:
+            click.echo("  Keeping existing sections.")
+        elif choice == 2:
+            new_sections: list[dict] = []
+            click.echo("  Enter sections one by one. Leave title blank to finish.\n")
+            while True:
+                title = click.prompt(f"  Section {len(new_sections) + 1} title", default="").strip()
+                if not title:
+                    break
+                prompt_text = click.prompt(f"  Section {len(new_sections) + 1} prompt").strip()
+                new_sections.append({"title": title, "prompt": prompt_text})
+                click.echo()
+            if new_sections:
+                cfg["report_sections"] = new_sections
+                click.echo(f"  ✓ {len(new_sections)} section(s) configured.")
+            else:
+                click.echo("  No sections entered — keeping existing sections.")
         else:
             cfg.pop("report_sections", None)
-            click.echo("  No sections entered — will use built-in defaults.")
-    else:
-        cfg.pop("report_sections", None)
-        click.echo("  Using built-in defaults.")
+            click.echo("  Cleared — will use built-in defaults.")
 
-    # Save
-    email_cfg = cfg.get("email", {})
-    email_cfg.update({
-        "to": to_value,
-        "from": from_email,
-        "smtp_host": email_cfg.get("smtp_host", "smtp.gmail.com"),
-        "smtp_port": email_cfg.get("smtp_port", 587),
-        "smtp_user": from_email,
-        "smtp_password": "",
-    })
+    # ── defaults & save ────────────────────────────────────────────────────────
     cfg.setdefault("feeds", [])
     cfg.setdefault("lookback_days", 7)
     cfg.setdefault("whisper_model", "medium")
     cfg.setdefault("whisper_language", "en")
     cfg.setdefault("notebooklm_notebook_prefix", "Podcast Summary")
-    cfg.update({
-        "project_root": str(project_root_path),
-        "parent_folder": parent_folder,
-        "email": email_cfg,
-        "retention": {
-            "audio_months": audio_months,
-            "transcripts_months": transcripts_months,
-            "reports_months": reports_months,
-        },
-    })
     _save_cfg(config_path, cfg)
     click.echo(f"\n✓ Config saved to {config_path}")
 
@@ -383,14 +491,18 @@ def init(ctx):
         if action == "1":
             click.echo()
             config_path = _select_existing_config()
+            click.echo(f"\n  Working on: {config_path}\n")
+            existing_cfg = _load_cfg(config_path)
+            sections = _pick_wizard_sections(existing_cfg)
+            _run_config_wizard(config_path, sections=sections)
         else:
             config_name = click.prompt("New config name (saved as ~/.config/psum/<name>.yaml)")
             config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
-        click.echo(f"\n  Working on: {config_path}\n")
+            click.echo(f"\n  Working on: {config_path}\n")
+            _run_config_wizard(config_path)
     else:
         config_path = ctx.obj["config"]
-
-    _run_config_wizard(config_path)
+        _run_config_wizard(config_path)
 
     # Offer to install cron job
     if click.confirm("\nInstall a cron job for this config?", default=True):
@@ -409,20 +521,27 @@ def init(ctx):
 @main.command("run")
 @click.option("--skip-fetch",      is_flag=True, help="Skip the fetch/download stage.")
 @click.option("--skip-transcribe", is_flag=True, help="Skip the transcription stage.")
-@click.option("--skip-upload",     is_flag=True, help="Skip the NotebookLM upload stage.")
-@click.option("--skip-email",      is_flag=True, help="Skip report generation and email entirely.")
+@click.option("--skip-report",     is_flag=True, help="Skip NotebookLM upload AND email report.")
 @click.option("--skip-cleanup",    is_flag=True, help="Skip the data cleanup stage.")
 @click.option("--save-report-only", is_flag=True,
               help="Generate and save report to disk without sending email.")
 @click.option("--folder",      default=None, help="Run folder, e.g. 20260218-20260225.")
-@click.option("--notebook-id", default=None, help="Reuse an existing NotebookLM notebook ID.")
+@click.option("--notebook-id", default=None,
+              help="Reuse an existing NotebookLM notebook ID (skips upload, runs email).")
 @click.pass_context
-def run_cmd(ctx, skip_fetch, skip_transcribe, skip_upload, skip_email, skip_cleanup,
+def run_cmd(ctx, skip_fetch, skip_transcribe, skip_report, skip_cleanup,
             save_report_only, folder, notebook_id):
     """Run the full pipeline (or specific stages).
 
-    If multiple configs exist and --config is not specified,
-    you will be prompted to select one.
+    Stages: fetch → transcribe → report (upload + email) → cleanup
+
+    Examples:
+      psum run                                      # full run
+      psum run --skip-fetch                         # transcribe onwards
+      psum run --skip-fetch --skip-transcribe       # upload + email only
+      psum run --skip-fetch --skip-transcribe \\
+               --notebook-id <id>                  # email only (reuse notebook)
+      psum run --skip-report                        # fetch + transcribe only
     """
     config_path = _pick_config(ctx.obj["config"])
     cfg = _load_cfg(config_path)
@@ -446,11 +565,12 @@ def run_cmd(ctx, skip_fetch, skip_transcribe, skip_upload, skip_email, skip_clea
         sys.exit(1)
 
     cmd = [str(python_bin), str(pipeline_py), "--config", str(config_path)]
-    if skip_fetch:       cmd.append("--skip-fetch")
-    if skip_transcribe:  cmd.append("--skip-transcribe")
-    if skip_upload:      cmd.append("--skip-upload")
-    if skip_email:       cmd.append("--skip-email")
-    if skip_cleanup:     cmd.append("--skip-cleanup")
+    if skip_fetch:      cmd.append("--skip-fetch")
+    if skip_transcribe: cmd.append("--skip-transcribe")
+    if skip_report:
+        cmd.append("--skip-upload")
+        cmd.append("--skip-email")
+    if skip_cleanup:    cmd.append("--skip-cleanup")
     if save_report_only: cmd.append("--save-report-only")
     if folder:           cmd += ["--folder", folder]
     if notebook_id:      cmd += ["--notebook-id", notebook_id]
@@ -528,7 +648,7 @@ def receiver():
 @click.pass_context
 def receiver_list(ctx):
     """Print all configured email recipients."""
-    cfg = _load_cfg(ctx.obj["config"])
+    cfg = _load_cfg(_pick_config(ctx.obj["config"]))
     to = cfg.get("email", {}).get("to", "")
     if not to:
         click.echo("No recipients configured.")
@@ -543,7 +663,7 @@ def receiver_list(ctx):
 @click.pass_context
 def receiver_add(ctx, email_addr):
     """Add an email recipient."""
-    config_path = ctx.obj["config"]
+    config_path = _pick_config(ctx.obj["config"])
     cfg = _load_cfg(config_path)
     email_cfg = cfg.setdefault("email", {})
     to = email_cfg.get("to", "")
@@ -562,7 +682,7 @@ def receiver_add(ctx, email_addr):
 @click.pass_context
 def receiver_remove(ctx, email_addr):
     """Remove an email recipient."""
-    config_path = ctx.obj["config"]
+    config_path = _pick_config(ctx.obj["config"])
     cfg = _load_cfg(config_path)
     email_cfg = cfg.setdefault("email", {})
     to = email_cfg.get("to", "")
@@ -677,22 +797,31 @@ def config_cmd():
 
 @config_cmd.command("create")
 def config_create():
-    """Interactively create or edit a config file.
-
-    Prompts for a name, then walks through all settings and saves
-    ~/.config/psum/<name>.yaml. Does not set up a cron job — use
-    'psum init' or 'psum cron install' for that.
-    """
+    """Interactively create a new config or update an existing one."""
     existing = _list_config_files()
     if existing:
-        click.echo("Existing configs: " + ", ".join(c.stem for c in existing) + "\n")
-    config_name = click.prompt("Config name (saved as ~/.config/psum/<name>.yaml)")
-    config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
-    if config_path.exists():
-        click.echo(f"  ✓ Editing existing config: {config_path}\n")
+        click.echo("What would you like to do?\n")
+        click.echo("  1. Update an existing config")
+        click.echo("  2. Create a new config")
+        click.echo()
+        action = click.prompt("Choice", type=click.Choice(["1", "2"]), default="1")
+        if action == "1":
+            click.echo()
+            config_path = _select_existing_config()
+            click.echo(f"\n  Working on: {config_path}\n")
+            existing_cfg = _load_cfg(config_path)
+            sections = _pick_wizard_sections(existing_cfg)
+            _run_config_wizard(config_path, sections=sections)
+        else:
+            config_name = click.prompt("New config name (saved as ~/.config/psum/<name>.yaml)")
+            config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
+            click.echo(f"\n  + Creating: {config_path}\n")
+            _run_config_wizard(config_path)
     else:
-        click.echo(f"  + Creating new config: {config_path}\n")
-    _run_config_wizard(config_path)
+        config_name = click.prompt("Config name (saved as ~/.config/psum/<name>.yaml)")
+        config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
+        click.echo(f"\n  + Creating: {config_path}\n")
+        _run_config_wizard(config_path)
 
 
 @config_cmd.command("list")

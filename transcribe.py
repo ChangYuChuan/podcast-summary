@@ -16,10 +16,10 @@ Usage:
   python transcribe.py --config my_config.yaml --folder 20260218-20260225
 
 Input structure:
-  {parent_folder}/audio/{program_name}/{program_name}_{YYYYMMDD}.ext
+  {source_folder}/audio/{program_name}/{program_name}_{YYYYMMDD}.ext
 
 Output structure:
-  {parent_folder}/transcripts/{YYYYMMDD}-{YYYYMMDD}/{stem}.txt
+  {source_folder}/transcripts/{YYYYMMDD}-{YYYYMMDD}/{stem}.txt
 """
 
 import argparse
@@ -170,9 +170,9 @@ def transcribe_folder(config: dict, folder_name: str) -> None:
     # Import here so the script is importable without faster-whisper installed
     from faster_whisper import WhisperModel
 
-    parent_folder = Path(config["parent_folder"])
-    audio_root = parent_folder / "audio"
-    transcript_root = parent_folder / "transcripts"
+    source_folder = Path(config["source_folder"])
+    audio_root = source_folder / "audio"
+    transcript_root = source_folder / "transcripts"
 
     audio_files = find_audio_files_for_run(audio_root, folder_name)
     if not audio_files:

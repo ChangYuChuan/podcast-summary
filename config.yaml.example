@@ -5,7 +5,7 @@
 #
 # config.yaml is git-ignored to keep credentials out of the repo.
 
-parent_folder: /path/to/psum-data
+source_folder: /path/to/psum-data
 
 feeds:
   - name: My Podcast

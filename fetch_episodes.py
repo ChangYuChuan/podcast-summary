@@ -6,7 +6,7 @@ Fetches RSS feeds from Soundon, finds episodes published within the
 configured lookback window, and downloads the audio files.
 
 Output structure:
-  {parent_folder}/audio/{program_name}/{program_name}_{YYYYMMDD}.ext
+  {source_folder}/audio/{program_name}/{program_name}_{YYYYMMDD}.ext
 
 Each speaker has a persistent folder. Downloads are skipped if the file
 already exists (checked by filename / date), so re-runs are safe.
@@ -146,8 +146,8 @@ def fetch_and_download(config: dict, folder_name: str | None = None) -> None:
         start_date = date(int(parts[0][:4]), int(parts[0][4:6]), int(parts[0][6:8]))
         end_date   = date(int(parts[1][:4]), int(parts[1][4:6]), int(parts[1][6:8]))
 
-    parent_folder = Path(config["parent_folder"])
-    audio_root = parent_folder / "audio"
+    source_folder = Path(config["source_folder"])
+    audio_root = source_folder / "audio"
 
     print(f"Date range  : {start_date} → {end_date}")
     print(f"Audio root  : {audio_root}")

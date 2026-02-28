@@ -79,7 +79,7 @@ def validate_audio_files(config: dict, folder_name: str) -> bool:
       - Returns False (abort) only when zero usable audio files remain after cleanup.
     """
     banner("GUARD — Audio File Integrity")
-    audio_root = Path(config["parent_folder"]) / "audio"
+    audio_root = Path(config["source_folder"]) / "audio"
     parts = folder_name.split("-")
     start_str, end_str = parts[0], parts[1]
 
@@ -299,7 +299,7 @@ def _cleanup_audio_by_speaker(audio_root: Path, months: int) -> None:
 def cleanup_old_data(config: dict) -> bool:
     """Clean up old audio, transcript, and report files per retention config."""
     retention = config.get("retention", {})
-    parent    = Path(config["parent_folder"])
+    parent    = Path(config["source_folder"])
 
     _cleanup_audio_by_speaker(
         parent / "audio",

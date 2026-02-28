@@ -2,6 +2,7 @@ venv/
 venv14/
 data/
 logs/
+build/
 config.yaml
 __pycache__/
 *.egg-info/

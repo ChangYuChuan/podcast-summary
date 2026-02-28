@@ -165,8 +165,8 @@ def add_source_file(nlm_path: str, notebook_id: str, file_path: Path) -> None:
 def run(config: dict, folder_name: str) -> str:
     """Run the upload stage and return the notebook_id."""
     nlm_path = config.get("nlm_path", "nlm")
-    parent_folder = Path(config["parent_folder"])
-    transcript_root = parent_folder / "transcripts"
+    source_folder = Path(config["source_folder"])
+    transcript_root = source_folder / "transcripts"
 
     txt_files = find_transcripts_for_run(transcript_root, folder_name)
     if not txt_files:
