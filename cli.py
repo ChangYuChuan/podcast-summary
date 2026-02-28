@@ -168,53 +168,13 @@ def main(ctx, config):
     ctx.obj["config"] = Path(config)
 
 
-# ─── init ─────────────────────────────────────────────────────────────────────
+# ─── Shared config wizard ─────────────────────────────────────────────────────
 
-@main.command()
-@click.pass_context
-def init(ctx):
-    """Interactive setup wizard. Run once per config you want to create."""
-    click.echo("\n=== Podcast Summary — Setup Wizard ===\n")
-
-    # 0a. Choose: edit existing config or create new one
-    existing = _list_config_files()
-    if existing and ctx.obj["config"] == DEFAULT_CONFIG:
-        click.echo("What would you like to do?\n")
-        click.echo("  1. Edit an existing config")
-        click.echo("  2. Create a new config")
-        click.echo()
-        action = click.prompt("Choice", type=click.Choice(["1", "2"]), default="1")
-        if action == "1":
-            if len(existing) == 1:
-                config_path = existing[0]
-            else:
-                click.echo()
-                for i, c in enumerate(existing, 1):
-                    marker = "  ← default" if c == DEFAULT_CONFIG else ""
-                    click.echo(f"  {i}. {c.name}{marker}")
-                click.echo()
-                idx = click.prompt(
-                    "Select config",
-                    type=click.IntRange(1, len(existing)),
-                    default=1,
-                )
-                config_path = existing[idx - 1]
-            click.echo(f"  ✓ Editing: {config_path}\n")
-        else:
-            config_name = click.prompt("New config name (saved as ~/.config/psum/<name>.yaml)")
-            config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
-            click.echo(f"  + Creating: {config_path}\n")
-    else:
-        # --config was passed explicitly, or no configs exist yet
-        config_path = ctx.obj["config"]
-        if config_path.exists():
-            click.echo(f"  ✓ Editing: {config_path}\n")
-        else:
-            click.echo(f"  + Creating: {config_path}\n")
-
+def _run_config_wizard(config_path: Path) -> None:
+    """Walk through all config settings interactively and save the result."""
     cfg = _load_cfg(config_path)
 
-    # 0. Project root (where pipeline.py and venv/ live)
+    # Project root (where pipeline.py and venv/ live)
     cwd = Path.cwd()
     saved_root = cfg.get("project_root", "")
     if (cwd / "pipeline.py").exists():
@@ -232,11 +192,11 @@ def init(ctx):
     else:
         click.echo(f"  ✓ pipeline.py found at {project_root_path}")
 
-    # 1. Parent folder
+    # Parent folder
     default_folder = cfg.get("parent_folder", str(Path.home() / "psum-data"))
     parent_folder = click.prompt("Data folder path [required]", default=default_folder)
 
-    # 2. nlm — installed automatically by postinstall; check auth status
+    # nlm
     nlm_path_expanded = cfg.get("nlm_path", "")
     if nlm_path_expanded and Path(nlm_path_expanded).exists():
         click.echo(f"  ✓ nlm found at {nlm_path_expanded}")
@@ -252,7 +212,7 @@ def init(ctx):
         click.echo("  ! nlm not found — run: psum config set nlm_path /path/to/nlm")
         click.echo("    (or reinstall: npm install -g podcast-summary)")
 
-    # 3. SMTP password → ~/.zprofile (optional)
+    # SMTP password → ~/.zprofile (optional)
     existing_password = os.environ.get("EMAIL_SMTP_PASSWORD", "")
     if existing_password:
         click.echo("\n  EMAIL_SMTP_PASSWORD is already set in environment.")
@@ -279,11 +239,11 @@ def init(ctx):
             smtp_password = ""
             click.echo("  Skipped — set EMAIL_SMTP_PASSWORD in ~/.zprofile before using the email stage.")
 
-    # 4. Sender email
+    # Sender email
     default_from = cfg.get("email", {}).get("from", "")
     from_email = click.prompt("\nSender email (Gmail address) [required]", default=default_from)
 
-    # 5. Recipient email(s)
+    # Recipient email(s)
     existing_to = cfg.get("email", {}).get("to", "")
     if isinstance(existing_to, list):
         default_to = ", ".join(existing_to)
@@ -295,7 +255,7 @@ def init(ctx):
     to_list = [e.strip() for e in to_raw.split(",") if e.strip()]
     to_value = to_list if len(to_list) > 1 else (to_list[0] if to_list else "")
 
-    # 6. Test SMTP connection (optional)
+    # Test SMTP connection (optional)
     if smtp_password and click.confirm("\nTest SMTP connection now?", default=True):
         try:
             smtp_host = cfg.get("email", {}).get("smtp_host", "smtp.gmail.com")
@@ -308,7 +268,7 @@ def init(ctx):
         except Exception as exc:
             click.echo(f"  ✗ SMTP test failed: {exc}")
 
-    # 7. Retention settings
+    # Retention settings
     click.echo("\n--- Retention Settings [optional, press Enter to keep defaults] ---")
     retention = cfg.get("retention", {})
     audio_months = click.prompt(
@@ -327,7 +287,7 @@ def init(ctx):
         type=int,
     )
 
-    # 8. Write config.yaml
+    # Save
     email_cfg = cfg.get("email", {})
     email_cfg.update({
         "to": to_value,
@@ -355,7 +315,53 @@ def init(ctx):
     _save_cfg(config_path, cfg)
     click.echo(f"\n✓ Config saved to {config_path}")
 
-    # 9. Offer to install cron job
+
+def _select_existing_config() -> Path:
+    """Prompt the user to pick from existing configs. Returns the chosen path."""
+    existing = _list_config_files()
+    if len(existing) == 1:
+        click.echo(f"  ✓ Using: {existing[0].name}")
+        return existing[0]
+    for i, c in enumerate(existing, 1):
+        marker = "  ← default" if c == DEFAULT_CONFIG else ""
+        click.echo(f"  {i}. {c.name}{marker}")
+    click.echo()
+    idx = click.prompt(
+        "Select config",
+        type=click.IntRange(1, len(existing)),
+        default=1,
+    )
+    return existing[idx - 1]
+
+
+# ─── init ─────────────────────────────────────────────────────────────────────
+
+@main.command()
+@click.pass_context
+def init(ctx):
+    """Full setup wizard: create/edit a config then optionally install a cron job."""
+    click.echo("\n=== Podcast Summary — Setup Wizard ===\n")
+
+    existing = _list_config_files()
+    if existing and ctx.obj["config"] == DEFAULT_CONFIG:
+        click.echo("What would you like to do?\n")
+        click.echo("  1. Edit an existing config")
+        click.echo("  2. Create a new config")
+        click.echo()
+        action = click.prompt("Choice", type=click.Choice(["1", "2"]), default="1")
+        if action == "1":
+            click.echo()
+            config_path = _select_existing_config()
+        else:
+            config_name = click.prompt("New config name (saved as ~/.config/psum/<name>.yaml)")
+            config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
+        click.echo(f"\n  Working on: {config_path}\n")
+    else:
+        config_path = ctx.obj["config"]
+
+    _run_config_wizard(config_path)
+
+    # Offer to install cron job
     if click.confirm("\nInstall a cron job for this config?", default=True):
         click.echo("Common schedules:")
         click.echo("  '0 8 * * 0'  — Sundays at 8 AM (default)")
@@ -363,7 +369,7 @@ def init(ctx):
         click.echo("  '0 8 * * 1'  — Mondays at 8 AM")
         click.echo("  '0 8 * * *'  — Every day at 8 AM")
         schedule = click.prompt("Cron schedule", default="0 8 * * 0")
-        job_name = click.prompt("Job name", default=config_name)
+        job_name = click.prompt("Job name", default=config_path.stem)
         _install_cron_job(schedule, config_path, job_name)
 
 
@@ -636,6 +642,26 @@ def cron_status():
 def config_cmd():
     """View and update configuration values."""
     pass
+
+
+@config_cmd.command("create")
+def config_create():
+    """Interactively create or edit a config file.
+
+    Prompts for a name, then walks through all settings and saves
+    ~/.config/psum/<name>.yaml. Does not set up a cron job — use
+    'psum init' or 'psum cron install' for that.
+    """
+    existing = _list_config_files()
+    if existing:
+        click.echo("Existing configs: " + ", ".join(c.stem for c in existing) + "\n")
+    config_name = click.prompt("Config name (saved as ~/.config/psum/<name>.yaml)")
+    config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
+    if config_path.exists():
+        click.echo(f"  ✓ Editing existing config: {config_path}\n")
+    else:
+        click.echo(f"  + Creating new config: {config_path}\n")
+    _run_config_wizard(config_path)
 
 
 @config_cmd.command("list")
