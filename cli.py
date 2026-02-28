@@ -173,11 +173,24 @@ def main(ctx, config):
 @main.command()
 @click.pass_context
 def init(ctx):
-    """Interactive first-time setup wizard."""
-    config_path = ctx.obj["config"]
-    cfg = _load_cfg(config_path)
-
+    """Interactive setup wizard. Run once per config you want to create."""
     click.echo("\n=== Podcast Summary — Setup Wizard ===\n")
+
+    # 0a. Config name → determines the save path
+    existing_names = [c.stem for c in _list_config_files()]
+    if existing_names:
+        click.echo("Existing configs: " + ", ".join(existing_names))
+    config_name = click.prompt(
+        "Config name (saved as ~/.config/psum/<name>.yaml)",
+        default=ctx.obj["config"].stem,  # "config" unless --config was passed
+    )
+    config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
+    cfg = _load_cfg(config_path)
+    if config_path.exists():
+        click.echo(f"  ✓ Editing existing config: {config_path}")
+    else:
+        click.echo(f"  + Creating new config: {config_path}")
+    click.echo()
 
     # 0. Project root (where pipeline.py and venv/ live)
     cwd = Path.cwd()
@@ -321,14 +334,15 @@ def init(ctx):
     click.echo(f"\n✓ Config saved to {config_path}")
 
     # 9. Offer to install cron job
-    if click.confirm("\nInstall weekly cron job now?", default=True):
+    if click.confirm("\nInstall a cron job for this config?", default=True):
         click.echo("Common schedules:")
         click.echo("  '0 8 * * 0'  — Sundays at 8 AM (default)")
         click.echo("  '0 9 * * 0'  — Sundays at 9 AM")
         click.echo("  '0 8 * * 1'  — Mondays at 8 AM")
         click.echo("  '0 8 * * *'  — Every day at 8 AM")
         schedule = click.prompt("Cron schedule", default="0 8 * * 0")
-        _install_cron_job(schedule, config_path, DEFAULT_JOB_NAME)
+        job_name = click.prompt("Job name", default=config_name)
+        _install_cron_job(schedule, config_path, job_name)
 
 
 # ─── run ──────────────────────────────────────────────────────────────────────
@@ -346,8 +360,12 @@ def init(ctx):
 @click.pass_context
 def run_cmd(ctx, skip_fetch, skip_transcribe, skip_upload, skip_email, skip_cleanup,
             save_report_only, folder, notebook_id):
-    """Run the full pipeline (or specific stages)."""
-    config_path = ctx.obj["config"]
+    """Run the full pipeline (or specific stages).
+
+    If multiple configs exist and --config is not specified,
+    you will be prompted to select one.
+    """
+    config_path = _pick_config(ctx.obj["config"])
     cfg = _load_cfg(config_path)
     project_root = Path(cfg["project_root"]) if cfg.get("project_root") else PROJECT_ROOT
     python_bin = project_root / "venv" / "bin" / "python3"
