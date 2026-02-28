@@ -287,6 +287,37 @@ def _run_config_wizard(config_path: Path) -> None:
         type=int,
     )
 
+    # Report sections (prompts)
+    click.echo("\n--- Report Sections (prompts sent to NotebookLM) ---")
+    existing_sections = cfg.get("report_sections", [])
+    if existing_sections:
+        click.echo(f"  Current sections ({len(existing_sections)}):")
+        for i, s in enumerate(existing_sections, 1):
+            click.echo(f"    {i}. {s['title']}")
+    else:
+        click.echo("  Currently using built-in defaults.")
+    click.echo()
+
+    if click.confirm("  Configure custom report sections?", default=bool(existing_sections)):
+        sections: list[dict] = []
+        click.echo("  Enter sections one by one. Leave title blank to finish.\n")
+        while True:
+            title = click.prompt(f"  Section {len(sections) + 1} title", default="").strip()
+            if not title:
+                break
+            prompt_text = click.prompt(f"  Section {len(sections) + 1} prompt").strip()
+            sections.append({"title": title, "prompt": prompt_text})
+            click.echo()
+        if sections:
+            cfg["report_sections"] = sections
+            click.echo(f"  ✓ {len(sections)} section(s) configured.")
+        else:
+            cfg.pop("report_sections", None)
+            click.echo("  No sections entered — will use built-in defaults.")
+    else:
+        cfg.pop("report_sections", None)
+        click.echo("  Using built-in defaults.")
+
     # Save
     email_cfg = cfg.get("email", {})
     email_cfg.update({
@@ -730,129 +761,6 @@ def config_set(ctx, key, value):
                 obj[leaf] = value
     _save_cfg(config_path, cfg)
     click.echo(f"Set {key} = {obj[leaf]}")
-
-
-# ─── config prompt (subgroup of config) ──────────────────────────────────────
-
-@config_cmd.group("prompt")
-def config_prompt():
-    """Manage the NotebookLM query prompts (report sections) for a config."""
-    pass
-
-
-@config_prompt.command("list")
-@click.pass_context
-def prompt_list(ctx):
-    """List all prompt sections configured for a job."""
-    config_path = _pick_config(ctx.obj["config"])
-    cfg = _load_cfg(config_path)
-    sections = cfg.get("report_sections", [])
-    click.echo(f"# {config_path.name}\n")
-    if not sections:
-        click.echo("No custom prompts configured — using built-in defaults.")
-        click.echo("Run 'psum config prompt add' to add your first custom section.")
-        return
-    for i, s in enumerate(sections, 1):
-        prompt_preview = s["prompt"][:80].replace("\n", " ")
-        if len(s["prompt"]) > 80:
-            prompt_preview += "…"
-        click.echo(f"  {i}. {s['title']}")
-        click.echo(f"     {prompt_preview}")
-        click.echo()
-
-
-@config_prompt.command("add")
-@click.pass_context
-def prompt_add(ctx):
-    """Add a new prompt section to a config."""
-    config_path = _pick_config(ctx.obj["config"])
-    cfg = _load_cfg(config_path)
-    sections = cfg.setdefault("report_sections", [])
-
-    click.echo(f"Adding a new prompt section to {config_path.name}\n")
-    title = click.prompt("Section title")
-    click.echo("Prompt text (press Enter twice when done):")
-    lines = []
-    while True:
-        line = input()
-        if line == "" and lines and lines[-1] == "":
-            break
-        lines.append(line)
-    prompt_text = "\n".join(lines).strip()
-
-    if not prompt_text:
-        click.echo("Aborted — prompt text was empty.")
-        return
-
-    sections.append({"title": title, "prompt": prompt_text})
-    _save_cfg(config_path, cfg)
-    click.echo(f"\n✓ Added section '{title}' ({len(sections)} total).")
-
-
-@config_prompt.command("remove")
-@click.pass_context
-def prompt_remove(ctx):
-    """Remove a prompt section from a config."""
-    config_path = _pick_config(ctx.obj["config"])
-    cfg = _load_cfg(config_path)
-    sections = cfg.get("report_sections", [])
-
-    if not sections:
-        click.echo("No custom prompts configured for this config.")
-        return
-
-    click.echo(f"# {config_path.name}\n")
-    for i, s in enumerate(sections, 1):
-        click.echo(f"  {i}. {s['title']}")
-    click.echo()
-    idx = click.prompt(
-        "Remove section number",
-        type=click.IntRange(1, len(sections)),
-    )
-    removed = sections.pop(idx - 1)
-    cfg["report_sections"] = sections
-    _save_cfg(config_path, cfg)
-    click.echo(f"✓ Removed '{removed['title']}'.")
-
-
-@config_prompt.command("edit")
-@click.pass_context
-def prompt_edit(ctx):
-    """Edit the title or prompt text of an existing section."""
-    config_path = _pick_config(ctx.obj["config"])
-    cfg = _load_cfg(config_path)
-    sections = cfg.get("report_sections", [])
-
-    if not sections:
-        click.echo("No custom prompts configured. Use 'psum config prompt add' first.")
-        return
-
-    click.echo(f"# {config_path.name}\n")
-    for i, s in enumerate(sections, 1):
-        click.echo(f"  {i}. {s['title']}")
-    click.echo()
-    idx = click.prompt(
-        "Edit section number",
-        type=click.IntRange(1, len(sections)),
-    )
-    section = sections[idx - 1]
-
-    new_title = click.prompt("Title", default=section["title"])
-    click.echo(f"Current prompt:\n{section['prompt']}\n")
-    click.echo("New prompt text (press Enter twice when done, or just Enter twice to keep current):")
-    lines = []
-    while True:
-        line = input()
-        if line == "" and lines and lines[-1] == "":
-            break
-        lines.append(line)
-    new_prompt = "\n".join(lines).strip()
-
-    section["title"]  = new_title
-    if new_prompt:
-        section["prompt"] = new_prompt
-    _save_cfg(config_path, cfg)
-    click.echo(f"\n✓ Updated section '{new_title}'.")
 
 
 # ─── nlm-login ────────────────────────────────────────────────────────────────
