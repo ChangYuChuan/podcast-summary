@@ -176,21 +176,43 @@ def init(ctx):
     """Interactive setup wizard. Run once per config you want to create."""
     click.echo("\n=== Podcast Summary — Setup Wizard ===\n")
 
-    # 0a. Config name → determines the save path
-    existing_names = [c.stem for c in _list_config_files()]
-    if existing_names:
-        click.echo("Existing configs: " + ", ".join(existing_names))
-    config_name = click.prompt(
-        "Config name (saved as ~/.config/psum/<name>.yaml)",
-        default=ctx.obj["config"].stem,  # "config" unless --config was passed
-    )
-    config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
-    cfg = _load_cfg(config_path)
-    if config_path.exists():
-        click.echo(f"  ✓ Editing existing config: {config_path}")
+    # 0a. Choose: edit existing config or create new one
+    existing = _list_config_files()
+    if existing and ctx.obj["config"] == DEFAULT_CONFIG:
+        click.echo("What would you like to do?\n")
+        click.echo("  1. Edit an existing config")
+        click.echo("  2. Create a new config")
+        click.echo()
+        action = click.prompt("Choice", type=click.Choice(["1", "2"]), default="1")
+        if action == "1":
+            if len(existing) == 1:
+                config_path = existing[0]
+            else:
+                click.echo()
+                for i, c in enumerate(existing, 1):
+                    marker = "  ← default" if c == DEFAULT_CONFIG else ""
+                    click.echo(f"  {i}. {c.name}{marker}")
+                click.echo()
+                idx = click.prompt(
+                    "Select config",
+                    type=click.IntRange(1, len(existing)),
+                    default=1,
+                )
+                config_path = existing[idx - 1]
+            click.echo(f"  ✓ Editing: {config_path}\n")
+        else:
+            config_name = click.prompt("New config name (saved as ~/.config/psum/<name>.yaml)")
+            config_path = PSUM_CONFIG_DIR / f"{config_name}.yaml"
+            click.echo(f"  + Creating: {config_path}\n")
     else:
-        click.echo(f"  + Creating new config: {config_path}")
-    click.echo()
+        # --config was passed explicitly, or no configs exist yet
+        config_path = ctx.obj["config"]
+        if config_path.exists():
+            click.echo(f"  ✓ Editing: {config_path}\n")
+        else:
+            click.echo(f"  + Creating: {config_path}\n")
+
+    cfg = _load_cfg(config_path)
 
     # 0. Project root (where pipeline.py and venv/ live)
     cwd = Path.cwd()
