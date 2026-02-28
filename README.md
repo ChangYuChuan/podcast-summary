@@ -34,18 +34,15 @@ fetch → transcribe → upload → email → cleanup
 ## Installation
 
 ```bash
-# Clone the repo
-git clone https://github.com/ChangYuChuan/podcast-summary.git
-cd podcast-summary
+# Install from npm (creates ~/.config/psum/venv automatically)
+npm install -g podcast-summary
 
-# Install CLI + nlm via npm (creates ~/.config/psum/venv automatically)
-node scripts/postinstall.js
-
-# Add psum to your PATH (if not already via npm global bin)
+# Add psum to your PATH
 echo 'export PATH="$HOME/.config/psum/venv/bin:$PATH"' >> ~/.zprofile
 source ~/.zprofile
 
 # Set up the pipeline venv (needed for transcription — heavier dependencies)
+cd "$(npm root -g)/podcast-summary"
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
@@ -55,7 +52,7 @@ venv/bin/pip install -r requirements.txt
 | Venv | Location | Purpose |
 |---|---|---|
 | CLI venv | `~/.config/psum/venv/` | Lightweight — `psum` CLI + `nlm`. Created by postinstall. |
-| Pipeline venv | `./venv/` | Heavy — `faster-whisper`, feedparser, etc. Created manually. |
+| Pipeline venv | `<npm_package_dir>/venv/` | Heavy — `faster-whisper`, feedparser, etc. Created manually. |
 
 ---
 
