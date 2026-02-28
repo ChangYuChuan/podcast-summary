@@ -732,15 +732,15 @@ def config_set(ctx, key, value):
     click.echo(f"Set {key} = {obj[leaf]}")
 
 
-# ─── prompt ───────────────────────────────────────────────────────────────────
+# ─── config prompt (subgroup of config) ──────────────────────────────────────
 
-@main.group()
-def prompt():
+@config_cmd.group("prompt")
+def config_prompt():
     """Manage the NotebookLM query prompts (report sections) for a config."""
     pass
 
 
-@prompt.command("list")
+@config_prompt.command("list")
 @click.pass_context
 def prompt_list(ctx):
     """List all prompt sections configured for a job."""
@@ -750,7 +750,7 @@ def prompt_list(ctx):
     click.echo(f"# {config_path.name}\n")
     if not sections:
         click.echo("No custom prompts configured — using built-in defaults.")
-        click.echo("Run 'psum prompt add' to add your first custom section.")
+        click.echo("Run 'psum config prompt add' to add your first custom section.")
         return
     for i, s in enumerate(sections, 1):
         prompt_preview = s["prompt"][:80].replace("\n", " ")
@@ -761,7 +761,7 @@ def prompt_list(ctx):
         click.echo()
 
 
-@prompt.command("add")
+@config_prompt.command("add")
 @click.pass_context
 def prompt_add(ctx):
     """Add a new prompt section to a config."""
@@ -789,7 +789,7 @@ def prompt_add(ctx):
     click.echo(f"\n✓ Added section '{title}' ({len(sections)} total).")
 
 
-@prompt.command("remove")
+@config_prompt.command("remove")
 @click.pass_context
 def prompt_remove(ctx):
     """Remove a prompt section from a config."""
@@ -815,7 +815,7 @@ def prompt_remove(ctx):
     click.echo(f"✓ Removed '{removed['title']}'.")
 
 
-@prompt.command("edit")
+@config_prompt.command("edit")
 @click.pass_context
 def prompt_edit(ctx):
     """Edit the title or prompt text of an existing section."""
@@ -824,7 +824,7 @@ def prompt_edit(ctx):
     sections = cfg.get("report_sections", [])
 
     if not sections:
-        click.echo("No custom prompts configured. Use 'psum prompt add' first.")
+        click.echo("No custom prompts configured. Use 'psum config prompt add' first.")
         return
 
     click.echo(f"# {config_path.name}\n")
