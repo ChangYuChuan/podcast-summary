@@ -28,6 +28,9 @@ try:
 except ImportError:
     HAS_TQDM = False
 
+# Files smaller than this are considered incomplete/corrupt and will be re-downloaded.
+MIN_AUDIO_BYTES = 512 * 1024  # 512 KB
+
 
 # ---------------------------------------------------------------------------
 # Config & date helpers
@@ -187,7 +190,7 @@ def fetch_and_download(config: dict, folder_name: str | None = None) -> None:
             filename = f"{program_name}_{date_str}{ext}"
             dest = speaker_dir / filename
 
-            if dest.exists() and dest.stat().st_size > 0:
+            if dest.exists() and dest.stat().st_size >= MIN_AUDIO_BYTES:
                 print(f"  Already exists, skipping: {filename}")
                 found += 1
                 continue
