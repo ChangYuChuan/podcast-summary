@@ -1,0 +1,55 @@
+# config.yaml.example
+#
+# Copy this file to config.yaml and fill in your values,
+# OR run `psum init` to generate it interactively.
+#
+# config.yaml is git-ignored to keep credentials out of the repo.
+
+parent_folder: /path/to/psum-data
+
+feeds:
+  - name: My Podcast
+    url: https://example.com/feed.xml
+  - name: Another Show
+    url: https://example.com/other-feed.xml
+
+lookback_days: 7
+whisper_model: medium       # tiny / base / small / medium / large / large-v3
+whisper_language: en
+
+notebooklm_notebook_prefix: Podcast Summary
+nlm_path: /path/to/nlm   # optional — only needed for NotebookLM upload stage
+
+# Title shown in the email header (default: "Podcast Summary")
+report_title: My Weekly Digest
+
+email:
+  # Single recipient:
+  to: you@example.com
+  # Multiple recipients (list):
+  # to:
+  #   - you@example.com
+  #   - colleague@example.com
+  from: sender@gmail.com
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  smtp_user: sender@gmail.com
+  smtp_password: ""   # Leave blank — use EMAIL_SMTP_PASSWORD env var instead
+
+# Data retention (0 = keep forever)
+retention:
+  audio_months: 3       # Delete audio files older than N months
+  transcripts_months: 0 # Delete transcripts older than N months (0 = keep forever)
+  reports_months: 0     # Delete reports older than N months (0 = keep forever)
+
+# Optional: override the default report sections sent to NotebookLM.
+# If omitted, a generic 3-section English template is used (Episode Summaries,
+# Key Themes & Insights, Takeaways & Action Items).
+#
+# Each section is queried independently, so you can have as many as you like.
+#
+# report_sections:
+#   - title: "Section Title"
+#     prompt: "The question / prompt to send to NotebookLM for this section"
+#   - title: "Another Section"
+#     prompt: "Another question..."

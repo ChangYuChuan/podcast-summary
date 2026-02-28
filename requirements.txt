@@ -1,0 +1,15 @@
+feedparser>=6.0
+requests>=2.28
+pyyaml>=6.0
+tqdm>=4.0
+faster-whisper>=1.0
+markdown>=3.0
+click>=8.0
+# notebooklm-mcp-cli requires Python >=3.11 — install into the CLI venv, not the pipeline venv:
+#   ~/.config/swr/venv/bin/pip install notebooklm-mcp-cli
+# Then set nlm_path in config:
+#   swr config set nlm_path ~/.config/swr/venv/bin/nlm
+
+# CLI + MCP entry points require Python >=3.10; install via:
+#   venv14/bin/pip install -e .
+# mcp>=1.0

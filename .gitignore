@@ -1,0 +1,9 @@
+venv/
+venv14/
+data/
+logs/
+config.yaml
+__pycache__/
+*.egg-info/
+*.pyc
+.DS_Store

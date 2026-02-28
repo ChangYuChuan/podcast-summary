@@ -1,0 +1,35 @@
+{
+  "name": "podcast-summary",
+  "version": "0.1.0",
+  "description": "Podcast summary pipeline — CLI and MCP server",
+  "bin": {
+    "psum": "bin/psum.js",
+    "psum-mcp": "bin/psum-mcp.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js",
+    "preuninstall": "node scripts/preuninstall.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/postinstall.js",
+    "scripts/preuninstall.js",
+    "*.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "config.yaml.example",
+    "run.sh"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "author": "Chang Yu Chuan <changyuchuanmicron@gmail.com>",
+  "keywords": [
+    "mcp",
+    "podcast",
+    "summary",
+    "cli",
+    "notebooklm"
+  ],
+  "license": "MIT"
+}
