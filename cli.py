@@ -706,8 +706,12 @@ def config_show(ctx):
 @click.argument("value")
 @click.pass_context
 def config_set(ctx, key, value):
-    """Set a config value using dot notation (e.g. retention.audio_months 6)."""
-    config_path = ctx.obj["config"]
+    """Set a config value using dot notation (e.g. retention.audio_months 6).
+
+    If multiple configs exist and --config is not specified,
+    you will be prompted to select which config to update.
+    """
+    config_path = _pick_config(ctx.obj["config"])
     cfg = _load_cfg(config_path)
     parts = key.split(".")
     obj = cfg
