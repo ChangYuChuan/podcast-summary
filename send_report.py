@@ -363,11 +363,12 @@ def send_email(config: dict, subject: str, plain_body: str, html_body: str) -> N
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = from_addr
-    msg["To"]      = to_header
+    msg["To"]      = from_addr   # generic To: so recipients are hidden from each other
+    msg["Bcc"]     = to_header
     msg.attach(MIMEText(plain_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body,  "html",  "utf-8"))
 
-    print(f"  Sending to {to_header} via {smtp_host}:{smtp_port} …")
+    print(f"  Sending to {len(to_list)} recipient(s) via {smtp_host}:{smtp_port} …")
     with smtplib.SMTP(smtp_host, smtp_port) as smtp:
         smtp.ehlo()
         smtp.starttls()
