@@ -122,6 +122,22 @@ def _fetch_via_transcript_api(video_id: str, language: str) -> str | None:
         return None
 
 
+def _resolve_ffmpeg_location() -> str | None:
+    """Return a path to ffmpeg yt-dlp can use, or None if it must rely on $PATH.
+
+    Prefer system ffmpeg, then fall back to the imageio-ffmpeg bundled binary.
+    """
+    import shutil
+    sys_ffmpeg = shutil.which("ffmpeg")
+    if sys_ffmpeg:
+        return None  # let yt-dlp find it on PATH
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
 def _download_audio(video_url: str, dest: Path) -> bool:
     """Download best-quality audio to dest (.mp3). Returns True on success."""
     try:
@@ -142,6 +158,10 @@ def _download_audio(video_url: str, dest: Path) -> bool:
         "quiet": True,
         "no_warnings": True,
     }
+    ffmpeg_loc = _resolve_ffmpeg_location()
+    if ffmpeg_loc:
+        ydl_opts["ffmpeg_location"] = ffmpeg_loc
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
