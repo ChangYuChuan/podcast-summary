@@ -13,6 +13,7 @@ dependencies = [
     "click>=8.0",
     "pyyaml>=6.0",
     "mcp>=1.0",
+    "notebooklm-mcp-cli>=0.6",
 ]
 
 [project.scripts]

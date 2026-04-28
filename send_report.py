@@ -403,7 +403,14 @@ def save_report(config: dict, folder_name: str, body: str) -> Path:
     return report_path
 
 
-def run(config: dict, folder_name: str, notebook_id: str, send_email_flag: bool = True) -> None:
+def run(
+    config: dict,
+    folder_name: str,
+    notebook_id: str,
+    send_email_flag: bool | None = None,
+    generate_image_flag: bool | None = None,
+    post_instagram_flag: bool | None = None,
+) -> None:
     nlm_path        = config.get("nlm_path", "nlm")
     notebook_prefix = config.get("notebooklm_notebook_prefix", "Podcast Summary")
     date_range      = _format_date_range(folder_name)
@@ -434,14 +441,46 @@ def run(config: dict, folder_name: str, notebook_id: str, send_email_flag: bool 
 
     # Step 4: Save report to disk
     print("\nSaving report …")
-    save_report(config, folder_name, plain_body)
+    report_path = save_report(config, folder_name, plain_body)
 
-    # Step 5: Send the email (skipped when send_email_flag=False)
-    if send_email_flag:
+    # Step 5: Send the email — flag overrides config; config defaults to True
+    email_cfg = config.get("email", {})
+    do_email = send_email_flag if send_email_flag is not None else email_cfg.get("enabled", True)
+
+    if do_email:
         print("\nSending email report …")
         send_email(config, subject, plain_body, html_body)
     else:
-        print("\nEmail sending skipped (save-report-only mode).")
+        print("\nEmail sending skipped (disabled in config or save-report-only mode).")
+
+    # Step 6: Generate images — one per report section (optional, non-fatal)
+    image_cfg = config.get("image_generation", {})
+    do_image = generate_image_flag if generate_image_flag is not None else image_cfg.get("enabled", False)
+    images: list[tuple[str | None, object]] = []
+
+    if do_image:
+        print("\nGenerating images …")
+        try:
+            import generate_image as _gen_image
+            images = _gen_image.generate(config, summary, folder_name, report_path.parent)
+        except Exception as exc:
+            print(f"  WARNING: Image generation failed — {exc}")
+
+    # Step 7: Post to Instagram (optional, non-fatal)
+    ig_cfg = config.get("instagram", {})
+    do_instagram = post_instagram_flag if post_instagram_flag is not None else ig_cfg.get("enabled", False)
+
+    if do_instagram:
+        image_urls = [url for url, _ in images if url]
+        if not image_urls:
+            print("\nInstagram posting skipped — no public image URLs available.")
+        else:
+            print(f"\nPosting {len(image_urls)} image(s) to Instagram …")
+            try:
+                import post_instagram as _post_ig
+                _post_ig.post(config, image_urls, folder_name)
+            except Exception as exc:
+                print(f"  WARNING: Instagram posting failed — {exc}")
 
 
 # ---------------------------------------------------------------------------

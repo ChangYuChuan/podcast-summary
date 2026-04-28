@@ -105,7 +105,7 @@ def verify_all(audio_files: list[Path], transcript_root: Path) -> dict[str, tupl
     results = {}
     for audio_file in audio_files:
         stem = audio_file.stem
-        speaker = stem.rsplit("_", 1)[0]
+        speaker = audio_file.parent.name
         transcript_path = transcript_root / speaker / f"{stem}.txt"
         results[audio_file.name] = verify_transcript(transcript_path)
     return results
@@ -199,8 +199,8 @@ def transcribe_folder(config: dict, folder_name: str) -> None:
     succeeded, skipped, failed = [], [], []
 
     for idx, audio_file in enumerate(audio_files, start=1):
-        stem = audio_file.stem                          # e.g. "股癌_20260225"
-        speaker = stem.rsplit("_", 1)[0]               # e.g. "股癌"
+        stem = audio_file.stem                          # e.g. "股癌_20260225" or "LexFridman_dQw4w9WgXcQ_20260421"
+        speaker = audio_file.parent.name               # always the feed/channel folder name
         speaker_transcript_dir = transcript_root / speaker
         speaker_transcript_dir.mkdir(parents=True, exist_ok=True)
         transcript_path = speaker_transcript_dir / f"{stem}.txt"

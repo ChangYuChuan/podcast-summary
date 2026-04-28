@@ -12,8 +12,24 @@ feeds:
     url: https://example.com/feed.xml
   - name: Another Show
     url: https://example.com/other-feed.xml
+  # YouTube channel — transcripts fetched via caption API, falls back to yt-dlp + Whisper
+  # - name: Lex Fridman
+  #   url: https://www.youtube.com/@lexfridman
+  #   type: youtube
+  #   language: en   # optional — defaults to whisper_language
 
+# How many days of episodes each pipeline run covers.
+# Pair this with `schedule` so runs don't overlap or leave gaps:
+#
+#   lookback_days: 1  +  schedule: "0 8 * * *"    → daily at 8 AM
+#   lookback_days: 3  +  schedule: "0 8 */3 * *"  → every 3 days at 8 AM
+#   lookback_days: 7  +  schedule: "0 8 * * 0"    → weekly, Sundays at 8 AM
+#
 lookback_days: 7
+
+# Cron expression used by `psum cron install` (reads this automatically).
+schedule: "0 8 * * 0"
+
 whisper_model: medium       # tiny / base / small / medium / large / large-v3
 whisper_language: en
 
@@ -24,6 +40,7 @@ nlm_path: /path/to/nlm   # optional — only needed for NotebookLM upload stage
 report_title: My Weekly Digest
 
 email:
+  enabled: true       # set to false to generate the report without emailing it
   # Single recipient:
   to: you@example.com
   # Multiple recipients (list):
@@ -53,3 +70,36 @@ retention:
 #     prompt: "The question / prompt to send to NotebookLM for this section"
 #   - title: "Another Section"
 #     prompt: "Another question..."
+
+# ---------------------------------------------------------------------------
+# Cover image generation (optional)
+# Requires: pip install openai  +  OPENAI_API_KEY env var
+# ---------------------------------------------------------------------------
+# image_generation:
+#   enabled: false
+#   model: gpt-image-2          # or dall-e-3, gpt-image-1, etc.
+#   size: 1024x1024             # model-dependent: 1024x1024 | 1792x1024 | 1024x1792
+#   quality: standard           # standard | hd  (model-dependent)
+#   style: infographic          # infographic (readable summary card) | illustration (abstract art)
+#   max_images: 10              # cap on images generated; one per report section (max 10 for Instagram)
+#   style_base: ""              # optional: shared visual style applied to every image for consistency
+#                               # e.g. "Minimalist design, white background, blue accent colour"
+#   # prompt_template overrides the built-in prompt per section.
+#   # Placeholders: {report_title} {date_range} {section_title} {card_label} {highlights} {themes}
+#   # prompt_template: "Instagram card for {report_title} — {section_title}:\n{highlights}"
+
+# ---------------------------------------------------------------------------
+# Instagram posting (optional)
+# Requires: Instagram Business/Creator account + Facebook App with
+#           instagram_content_publish permission + long-lived access token
+#           Set INSTAGRAM_ACCESS_TOKEN env var (or instagram.access_token below)
+# The cover image URL (from OpenAI, valid ~60 min) is used automatically.
+# ---------------------------------------------------------------------------
+# instagram:
+#   enabled: false
+#   # user_id is optional — auto-discovered from the token via GET /me if not set
+#   # user_id: "123456789"
+#   api_version: v21.0
+#   # caption_template is optional. Placeholders: {report_title} {date_range}
+#   # caption_template: "🎙 {report_title}\n{date_range}\n#podcast #digest"
+#   # access_token: ""          # prefer INSTAGRAM_ACCESS_TOKEN env var
