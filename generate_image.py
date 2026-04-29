@@ -183,6 +183,13 @@ def _signature_text(config: dict) -> str:
     return ""
 
 
+def _disclaimer_text(config: dict) -> str:
+    """Return the disclaimer line to render at the bottom of every card, or ''."""
+    image_cfg = config.get("image_generation", {})
+    text = image_cfg.get("disclaimer")
+    return str(text).strip() if text else ""
+
+
 # ---------------------------------------------------------------------------
 # Public image-hosting fallback chain
 # ---------------------------------------------------------------------------
@@ -373,39 +380,61 @@ def _build_section_prompt(
 
     chinese = _is_chinese(config)
     signature = _signature_text(config)
+    disclaimer = _disclaimer_text(config)
 
     if style == "illustration":
         if chinese:
-            sig_zh = (
-                f"在卡片右下角放一個小小的、低調的浮水印簽名「{signature}」，"
-                "字體比主視覺小很多，顏色為半透明的中性灰，不要喧賓奪主。"
-                if signature else ""
-            )
+            footer_lines_zh: list[str] = []
+            if disclaimer:
+                footer_lines_zh.append(
+                    f"在卡片底部以小字、低調的方式放一行免責聲明「{disclaimer}」，"
+                    "字體比主視覺小很多，顏色為柔和的中性灰，不要遮蓋主畫面。"
+                )
+            if signature:
+                footer_lines_zh.append(
+                    f"在卡片右下角放一個小小的、低調的浮水印簽名「{signature}」，"
+                    "字體更小，半透明的中性灰。"
+                )
+            footer_zh = " ".join(footer_lines_zh)
             return (
                 f"{'（' + card_label + '）' if card_label else ''}"
                 f"為《{report_title}》（{date_range}）的「{title}」段落設計一張 Instagram 插畫。"
-                f"{prefix} 主題內容：{themes} {sig_zh}"
+                f"{prefix} 主題內容：{themes} {footer_zh}"
             )
-        sig_en = (
-            f" Place a small, subtle watermark signature '{signature}' in the "
-            "bottom-right corner — much smaller than the main art, semi-transparent grey."
-            if signature else ""
-        )
+        footer_en_parts: list[str] = []
+        if disclaimer:
+            footer_en_parts.append(
+                f" Render a small disclaimer line '{disclaimer}' near the bottom — "
+                "small font, soft grey, deliberately understated."
+            )
+        if signature:
+            footer_en_parts.append(
+                f" Place a small, subtle signature '{signature}' in the bottom-right corner."
+            )
+        footer_en = "".join(footer_en_parts)
         return (
             f"{'(' + card_label + ') ' if card_label else ''}"
             f"Instagram illustration for '{report_title}' ({date_range}), "
-            f"section '{title}'. {prefix} Themes: {themes}{sig_en}"
+            f"section '{title}'. {prefix} Themes: {themes}{footer_en}"
         )
 
     # Default: infographic summary card
     if chinese:
         zh_label = f"（{card_label}）" if card_label else ""
-        sig_zh = (
-            f"\n在卡片底部放一個小巧、低調的簽名「{signature}」，"
-            "字體比內文小，置中或靠右對齊，使用淡藍色或柔和的灰色，"
-            "不要搶主視覺的焦點。"
-            if signature else ""
-        )
+        footer_zh = ""
+        if disclaimer or signature:
+            lines = ["\n卡片底部依序放置以下兩行（如有）："]
+            if disclaimer:
+                lines.append(
+                    f"  1) 免責聲明「{disclaimer}」 — 使用比內文小的字體，"
+                    "顏色為柔和的中性灰，置中對齊，僅作為提醒，不要搶主視覺的焦點。"
+                )
+            if signature:
+                lines.append(
+                    f"  {2 if disclaimer else 1}) 簽名「{signature}」 — "
+                    "字體比免責聲明再小一點，使用淡藍色或柔和的灰色，置中或靠右對齊。"
+                )
+            footer_zh = "\n".join(lines)
         return (
             f"請為《{report_title}》（{date_range}）設計一張 Instagram 資訊卡片。\n"
             f"{zh_label}段落主題：{title}\n\n"
@@ -413,23 +442,30 @@ def _build_section_prompt(
             f"視覺風格：{prefix}\n"
             "排版：段落標題以粗體放在卡片頂部，每一個重點獨立成一行，"
             "字體在手機上要清晰易讀；不要使用裝飾性元素干擾文字閱讀，留白要充足。"
-            f"{sig_zh}\n"
+            f"{footer_zh}\n"
             "重要：所有文字必須是正確的繁體中文（不可出現簡體字、亂碼、英文亂譯）。\n"
             "嚴禁在卡片上出現任何 podcast、YouTube、節目、頻道、集數、主持人或來賓的名稱。"
         )
 
-    sig_en = (
-        f"\nFooter: place a small, subtle signature '{signature}' at the very bottom "
-        "of the card — small font, soft blue or muted grey, centred or right-aligned."
-        if signature else ""
-    )
+    footer_en = ""
+    if disclaimer or signature:
+        footer_en_lines = ["\nFooter (in this order, near the very bottom of the card):"]
+        if disclaimer:
+            footer_en_lines.append(
+                f"  - Disclaimer line '{disclaimer}' in a small, soft-grey font, centred."
+            )
+        if signature:
+            footer_en_lines.append(
+                f"  - Signature '{signature}' below the disclaimer, even smaller, soft blue or muted grey."
+            )
+        footer_en = "\n".join(footer_en_lines)
     return (
         f"Design an Instagram summary card for '{report_title}' ({date_range}).\n"
         f"{'(' + card_label + ') ' if card_label else ''}Section: {title}\n\n"
         f"Display exactly these points as the main content:\n{highlights}\n\n"
         f"Visual style: {prefix}\n"
         "Layout: bold section title at top, each point on its own line, "
-        f"readable at mobile size. No decorative clutter — let the text breathe.{sig_en}"
+        f"readable at mobile size. No decorative clutter — let the text breathe.{footer_en}"
     )
 
 

@@ -109,6 +109,9 @@ image_generation:
   # language: zh              # override (defaults to whisper_language)
   # signature: "ig:your_handle"  # subtle footer on every card (auto-derived from
                                  # instagram.handle when posting is enabled)
+  # disclaimer: "Personal notes — not investment advice"
+                                 # rendered above the signature in soft grey;
+                                 # use this for "not financial advice" copy
   # style_base: "..."         # shared visual style for cohesion across cards
   # prompt_template: "..."    # advanced: full prompt override
 
