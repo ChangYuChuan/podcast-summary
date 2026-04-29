@@ -633,13 +633,37 @@ def validate_report(summary: str) -> None:
         )
 
 
-def save_report(config: dict, folder_name: str, body: str) -> Path:
-    """Save the report text to disk and return the file path."""
+def save_report(
+    config: dict,
+    folder_name: str,
+    body: str,
+    config_name: str | None = None,
+) -> Path:
+    """Save the report text + a small meta.json next to it; return the report path.
+
+    `config_name` is the stem of the config file that produced this run
+    (e.g. `daily-ig-stock-report`). Captured in meta.json so `psum publish
+    --folder X` can re-run image+IG without the user re-typing the config
+    every time.
+    """
     report_dir = Path(config["source_folder"]) / "reports" / folder_name
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"report_{folder_name}.txt"
     report_path.write_text(body, encoding="utf-8")
     print(f"  Report saved to: {report_path}")
+
+    if config_name:
+        from datetime import datetime, timezone
+        meta = {
+            "config": config_name,
+            "folder": folder_name,
+            "report_mode": config.get("report_mode", "sections"),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        (report_dir / "meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
     return report_path
 
 
@@ -743,6 +767,7 @@ def run(
     send_email_flag: bool | None = None,
     generate_image_flag: bool | None = None,
     post_instagram_flag: bool | None = None,
+    config_name: str | None = None,
 ) -> dict:
     """Run the report stage. Returns a dict of per-substage results so the
     pipeline summary can show email / image / instagram outcomes individually.
@@ -777,9 +802,9 @@ def run(
     plain_body = build_email_body(folder_name, notebook_id, summary)
     html_body  = build_html_email(folder_name, notebook_id, summary, config=config)
 
-    # Step 4: Save report to disk
+    # Step 4: Save report to disk (with meta.json so `psum publish` can find it)
     print("\nSaving report …")
-    report_path = save_report(config, folder_name, plain_body)
+    report_path = save_report(config, folder_name, plain_body, config_name=config_name)
 
     # Step 5: Send the email — flag overrides config; config defaults to True
     email_cfg = config.get("email", {})

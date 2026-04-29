@@ -183,9 +183,15 @@ def run_email(
     send_email_flag: bool | None = None,
     generate_image_flag: bool | None = None,
     post_instagram_flag: bool | None = None,
+    config_name: str | None = None,
 ) -> "dict | bool":
     """Run the report stage. Returns the per-substage dict from send_report.run()
-    on success ({"email": ..., "image": ..., "instagram": ...}), False on crash."""
+    on success ({"email": ..., "image": ..., "instagram": ...}), False on crash.
+
+    `config_name` is the config file stem (e.g. 'daily-ig-stock-report'); it
+    gets stamped into the saved meta.json so `psum publish` can find this
+    report later without the user having to specify a config.
+    """
     import send_report
     banner("STAGE 4 — Generate Report & Send Email")
     t = time.time()
@@ -195,6 +201,7 @@ def run_email(
             send_email_flag=send_email_flag,
             generate_image_flag=generate_image_flag,
             post_instagram_flag=post_instagram_flag,
+            config_name=config_name,
         )
         print(f"\n[report] Done in {elapsed(t)}")
         return substages
@@ -509,6 +516,7 @@ def main() -> None:
                 send_email_flag=False if args.save_report_only else None,
                 generate_image_flag=False if args.skip_image else None,
                 post_instagram_flag=False if args.skip_instagram else None,
+                config_name=Path(args.config).stem,
             )
             if isinstance(sub, dict):
                 results.update(sub)  # fans out into "email", "image", "instagram"

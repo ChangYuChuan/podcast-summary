@@ -797,28 +797,111 @@ def run_cmd(ctx, config_name, skip_fetch, skip_transcribe, skip_report, skip_cle
 
 # ─── publish ──────────────────────────────────────────────────────────────────
 
+def _list_publishable_reports() -> list[tuple[Path, str, dict]]:
+    """Return [(config_path, folder, meta)] for every saved report we know about.
+
+    Walks every config in PSUM_CONFIG_DIR, looks under its `source_folder/reports/`
+    for folders that contain a saved report. Reads `meta.json` when present
+    (so the listing shows which config produced each one); reports without
+    meta.json are still included with an empty meta dict so legacy reports
+    aren't hidden from the picker.
+    """
+    import json as _json
+    rows: list[tuple[Path, str, dict]] = []
+    for cfg_path in _list_config_files():
+        try:
+            cfg = _load_cfg(cfg_path)
+        except Exception:
+            continue
+        source_folder = cfg.get("source_folder", "")
+        if not source_folder:
+            continue
+        reports_dir = Path(source_folder).expanduser() / "reports"
+        if not reports_dir.is_dir():
+            continue
+        for folder_dir in sorted(reports_dir.iterdir(), reverse=True):
+            if not folder_dir.is_dir():
+                continue
+            # A folder counts as "publishable" iff a report file exists.
+            has_report = (
+                (folder_dir / f"report_{folder_dir.name}.txt").exists()
+                or (folder_dir / f"weekly_report_{folder_dir.name}.txt").exists()
+            )
+            if not has_report:
+                continue
+            meta: dict = {}
+            meta_path = folder_dir / "meta.json"
+            if meta_path.exists():
+                try:
+                    meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception:
+                    meta = {}
+            rows.append((cfg_path, folder_dir.name, meta))
+    return rows
+
+
+def _pick_report(rows: list[tuple[Path, str, dict]]) -> tuple[Path, str]:
+    """Interactively pick one report from the listing; returns (config_path, folder)."""
+    if not rows:
+        click.echo("No saved reports found in any config's source_folder.", err=True)
+        click.echo("Run the full pipeline first (psum run [CONFIG]) to produce one.", err=True)
+        sys.exit(1)
+    if len(rows) == 1:
+        cfg_path, folder, _ = rows[0]
+        click.echo(f"  ✓ Using: {folder}  ({cfg_path.stem})")
+        return cfg_path, folder
+
+    click.echo("Available reports (most recent first):\n")
+    for i, (cfg_path, folder, meta) in enumerate(rows, 1):
+        meta_config = meta.get("config")
+        # Mark a discrepancy between the folder's owning config and the
+        # meta.json's config — happens after a config is renamed.
+        owner_tag = (
+            f"  [{cfg_path.stem}]"
+            if not meta_config or meta_config == cfg_path.stem
+            else f"  [{cfg_path.stem} ← meta says: {meta_config}]"
+        )
+        gen_tag = f"  ({meta['generated_at']})" if meta.get("generated_at") else ""
+        click.echo(f"  {i}. {folder}{owner_tag}{gen_tag}")
+    click.echo()
+    idx = click.prompt(
+        "Select report",
+        type=click.IntRange(1, len(rows)),
+        default=1,
+    )
+    cfg_path, folder, _ = rows[idx - 1]
+    return cfg_path, folder
+
+
 @main.command("publish")
-@click.argument("config_name", required=False, default=None,
-                metavar="[CONFIG]")
-@click.option("--folder", required=True,
-              help="Run folder containing the saved report, e.g. 20260428-20260429.")
+@click.option("--folder", default=None,
+              help="Run folder to publish (e.g. 20260428-20260429). "
+                   "Omit to pick from a list of all saved reports.")
 @click.pass_context
-def publish_cmd(ctx, config_name, folder):
+def publish_cmd(ctx, folder):
     """Generate images + post to Instagram from an already-saved report.
 
-    Skips fetch, transcribe, NotebookLM, and email entirely. Reads the
-    report file at {source_folder}/reports/{folder}/report_{folder}.txt
-    and runs only the image-generation and Instagram-posting stages.
+    Skips fetch, transcribe, NotebookLM, and email entirely — runs only the
+    image-generation and Instagram-posting stages against an existing report.
+    The config that originally produced the report is auto-detected from the
+    `meta.json` saved next to it.
 
-    Useful for re-publishing after tweaking prompts.image, the mascot,
-    the disclaimer, or any other image-side config — without burning
-    another round of NotebookLM queries.
-
+    \b
     Examples:
-      psum publish daily-ig-stock-report --folder 20260428-20260429
-      psum publish --folder 20260428-20260429   # picker if multiple configs
+      psum publish                                       # picker over all reports
+      psum publish --folder 20260428-20260429            # auto-detect config
     """
-    config_path = _resolve_config(ctx.obj["config"], config_name)
+    rows = _list_publishable_reports()
+
+    # If --folder is given, narrow to matching rows. Otherwise show full picker.
+    if folder:
+        rows = [r for r in rows if r[1] == folder]
+        if not rows:
+            click.echo(f"No saved report found for folder '{folder}'.", err=True)
+            click.echo("Run `psum publish` (no --folder) to see what's available.", err=True)
+            sys.exit(1)
+
+    config_path, picked_folder = _pick_report(rows)
     cfg = _load_cfg(config_path)
     project_root = Path(cfg["project_root"]) if cfg.get("project_root") else PROJECT_ROOT
     python_bin = project_root / "venv" / "bin" / "python3"
@@ -832,7 +915,7 @@ def publish_cmd(ctx, config_name, folder):
         str(python_bin), str(pipeline_py),
         "--config", str(config_path),
         "--publish-only",
-        "--folder", folder,
+        "--folder", picked_folder,
     ]
     result = subprocess.run(cmd, cwd=str(project_root))
     sys.exit(result.returncode)

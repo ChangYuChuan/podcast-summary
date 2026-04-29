@@ -258,10 +258,13 @@ psum run [CONFIG] --folder 20260218-20260225          # target a specific date r
 Generate cards + post to Instagram from an already-saved report (skips fetch / transcribe / NotebookLM / email entirely). Useful for re-publishing after tweaking `prompts.image`, the mascot, or any other image-side config without burning another round of NotebookLM queries.
 
 ```bash
-psum publish [CONFIG] --folder 20260428-20260429
+psum publish                              # interactive: pick from all saved reports
+psum publish --folder 20260428-20260429   # publish that specific folder
 ```
 
-Reads `{source_folder}/reports/{folder}/report_{folder}.txt`. The legacy `weekly_report_*.txt` filename is also accepted for older runs.
+The config that originally produced the report is auto-detected from a `meta.json` file saved next to the report (it records `config`, `folder`, `report_mode`, `generated_at`). Reports created before this metadata existed are still shown in the picker; the config they belong to is inferred from which config's `source_folder` they live under.
+
+Reports without `meta.json` are tagged with the config's name as a guess; once you re-run them through the full pipeline, the tag becomes authoritative.
 
 ### Config management
 
