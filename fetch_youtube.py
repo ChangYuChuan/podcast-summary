@@ -55,38 +55,34 @@ def _resolve_channel_id(channel_url: str) -> str | None:
     return info.get("channel_id") or info.get("uploader_id")
 
 
-def _list_channel_videos(
-    channel_url: str,
-    start_date: date,
-    end_date: date,
-) -> list[dict]:
-    """Return [{id, title, upload_date}] for videos published in [start_date, end_date].
-
-    Uses YouTube's per-channel RSS feed (https://www.youtube.com/feeds/videos.xml)
-    which is much faster than yt-dlp full-extraction. The feed surfaces the latest
-    ~15 videos with proper publication dates and video IDs.
-    """
+def _list_via_rss(
+    channel_id: str, start_date: date, end_date: date
+) -> list[dict] | None:
+    """Try the per-channel Atom feed. Returns None if it's blocked / unavailable."""
     import requests
     import feedparser
     from datetime import datetime, timezone
 
-    channel_id = _resolve_channel_id(channel_url)
-    if not channel_id:
-        raise RuntimeError(f"Could not resolve channel ID for {channel_url}")
+    try:
+        resp = requests.get(
+            f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return None
+    except Exception:
+        return None
 
-    rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-    resp = requests.get(rss_url, timeout=30)
-    resp.raise_for_status()
     parsed = feedparser.parse(resp.content)
+    if not parsed.entries:
+        return None
 
     videos = []
     for entry in parsed.entries:
-        # feedparser exposes the YouTube namespace as yt_videoid
         video_id = getattr(entry, "yt_videoid", None) or entry.get("id", "").split(":")[-1]
         if not video_id:
             continue
 
-        # YouTube's Atom feed uses ISO 8601 dates (not RFC 2822 like most RSS feeds).
         published_raw = entry.get("published") or entry.get("updated")
         if not published_raw:
             continue
@@ -108,6 +104,92 @@ def _list_channel_videos(
             "url": f"https://www.youtube.com/watch?v={video_id}",
         })
     return videos
+
+
+def _list_via_ytdlp(
+    channel_url: str, start_date: date, end_date: date, max_videos: int = 30
+) -> list[dict]:
+    """Slower fallback: full yt-dlp extraction across /videos and /streams tabs.
+
+    /videos has regular uploads; /streams has livestreams (often the actual
+    analysis content). YouTube's RSS feed combines both, so we do too.
+    Shorts are excluded.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError(
+            "yt-dlp is required for YouTube channel support.\n"
+            "  Install: pip install yt-dlp"
+        )
+
+    base = channel_url.rstrip("/")
+    # Strip any trailing tab so we can append our own
+    for suffix in ("/videos", "/streams", "/shorts", "/featured"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+
+    start_str = start_date.strftime("%Y%m%d")
+    end_str = end_date.strftime("%Y%m%d")
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "ignoreerrors": True,
+        "extract_flat": False,
+        "playlistend": max_videos,
+    }
+
+    seen: set[str] = set()
+    videos: list[dict] = []
+    for tab in ("videos", "streams"):
+        url = f"{base}/{tab}"
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False) or {}
+        except Exception:
+            continue
+
+        for entry in info.get("entries") or []:
+            if not entry:
+                continue
+            upload_date = entry.get("upload_date", "")
+            if len(upload_date) != 8:
+                continue
+            if not (start_str <= upload_date <= end_str):
+                continue
+            vid_id = entry.get("id")
+            if not vid_id or vid_id in seen:
+                continue
+            seen.add(vid_id)
+            videos.append({
+                "id": vid_id,
+                "title": entry.get("title", vid_id),
+                "upload_date": upload_date,
+                "url": f"https://www.youtube.com/watch?v={vid_id}",
+            })
+    return videos
+
+
+def _list_channel_videos(
+    channel_url: str,
+    start_date: date,
+    end_date: date,
+) -> list[dict]:
+    """Return [{id, title, upload_date}] for videos published in [start_date, end_date].
+
+    Tries YouTube's per-channel Atom feed first (fast — ~0.7s/channel) and falls
+    back to a full yt-dlp listing (~5-30s/channel) if YouTube blocks the feed.
+    """
+    channel_id = _resolve_channel_id(channel_url)
+    if channel_id:
+        rss_videos = _list_via_rss(channel_id, start_date, end_date)
+        if rss_videos is not None:
+            return rss_videos
+        print(f"    (RSS feed unavailable — falling back to yt-dlp listing)")
+
+    return _list_via_ytdlp(channel_url, start_date, end_date)
 
 
 def _fetch_via_transcript_api(video_id: str, language: str) -> str | None:
@@ -200,8 +282,10 @@ def fetch_channel(config: dict, feed: dict, folder_name: str) -> None:
 
     try:
         videos = _list_channel_videos(channel_url, start_date, end_date)
-    except RuntimeError as exc:
-        print(f"  ERROR: {exc}")
+    except Exception as exc:
+        # Don't let a single bad channel kill the whole pipeline (e.g. YouTube's
+        # feeds endpoint occasionally returns 5xx).
+        print(f"  WARNING: could not list videos — {type(exc).__name__}: {exc}")
         print()
         return
 
