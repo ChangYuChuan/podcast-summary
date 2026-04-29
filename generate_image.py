@@ -116,92 +116,11 @@ def _themes_from_body(body: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Prompt construction
+# Prompt construction — template-driven, no copy lives in the code.
+# Every image's prompt is config["prompts"]["image"], with placeholders
+# substituted at run time. See _build_section_prompt below for the full list
+# of supported placeholders.
 # ---------------------------------------------------------------------------
-
-def _is_chinese(config: dict) -> bool:
-    """Return True when the report's working language is Chinese."""
-    lang = config.get("image_generation", {}).get("language") or config.get(
-        "whisper_language", "en"
-    )
-    return lang.lower().startswith("zh")
-
-
-def _style_prefix(config: dict) -> str:
-    """Shared visual-style description applied to every image in the set.
-
-    Being identical across all prompts is what makes the generated cards look
-    like a cohesive series rather than unrelated images.
-    """
-    image_cfg = config.get("image_generation", {})
-    if image_cfg.get("style_base"):
-        return image_cfg["style_base"]
-    chinese = _is_chinese(config)
-    if image_cfg.get("style", "infographic") == "illustration":
-        if chinese:
-            return (
-                "可愛、柔和的編輯插畫風格。色調以淡藍 / 粉藍 / 天空藍為主，"
-                "搭配一點奶油白與淺灰，整體感覺乾淨、療癒、討喜。"
-                "意象明確、焦點集中，不要使用過於飽和或刺眼的顏色。"
-                "整張圖不要出現任何文字或字符。"
-            )
-        return (
-            "Cute, soft editorial illustration. Pastel sky-blue / baby-blue / cream "
-            "palette, gentle and friendly, clean focal point. No harsh saturation, "
-            "no text anywhere."
-        )
-    if chinese:
-        return (
-            "簡潔可愛的 Instagram 資訊卡片，方形 1:1 構圖。"
-            "背景使用淡藍色（如 #DCEEFB / #BFE0F8 / 天空藍）或奶油白漸層，"
-            "搭配深藍色（#1F4F7A）的標題與內文，"
-            "重點處可以用一點粉藍或薄荷綠點綴，整體風格乾淨、可愛、討喜。"
-            "邊距留白寬鬆，使用清晰、現代的繁體中文無襯線字型（例如思源黑體 / Noto Sans TC）。"
-            "嚴禁出現任何簡體中文字，所有字皆需為繁體中文。"
-            "**背景與整體版面**請避免使用紅色 / 黃色 / 黑色等高飽和或對比過強的配色，"
-            "但若插畫角色（例如吉祥物）本身的固有毛色 / 膚色就是紅棕色或暖色系，"
-            "請依角色的設定如實繪製，不受此限制。"
-        )
-    return (
-        "Cute, clean Instagram infographic card, square 1:1. "
-        "Soft light-blue background (#DCEEFB / #BFE0F8 / sky-blue) or cream gradient, "
-        "deep-blue (#1F4F7A) title and body text, optional mint or pastel-blue accents. "
-        "Generous padding, modern friendly sans-serif typography, no harsh contrast."
-    )
-
-
-def _signature_text(config: dict) -> str:
-    """Return the signature line to render at the bottom of every card, or ''."""
-    image_cfg = config.get("image_generation", {})
-    sig = image_cfg.get("signature")
-    if sig:
-        return str(sig).strip()
-    # Auto-derive from Instagram config when posting is enabled
-    ig_cfg = config.get("instagram", {})
-    if ig_cfg.get("enabled"):
-        handle = ig_cfg.get("handle")
-        if handle:
-            return f"ig:{str(handle).lstrip('@').strip()}"
-    return ""
-
-
-def _disclaimer_text(config: dict) -> str:
-    """Return the disclaimer line to render at the bottom of every card, or ''."""
-    image_cfg = config.get("image_generation", {})
-    text = image_cfg.get("disclaimer")
-    return str(text).strip() if text else ""
-
-
-def _mascot_description(config: dict) -> str:
-    """Return a short description of a mascot to render on every card, or ''.
-
-    Lets the user brand the cards with a recurring character — e.g. their pet —
-    without re-uploading a reference image. The description is fed into the
-    prompt so the model paints a consistent mascot illustration on each card.
-    """
-    image_cfg = config.get("image_generation", {})
-    text = image_cfg.get("mascot")
-    return str(text).strip() if text else ""
 
 
 # ---------------------------------------------------------------------------
@@ -371,142 +290,45 @@ def _build_section_prompt(
     total: int,
     folder_name: str,
 ) -> str:
-    report_title = config.get("report_title", "Podcast Digest")
-    date_range = _format_date_range(folder_name)
-    image_cfg = config.get("image_generation", {})
-    style = image_cfg.get("style", "infographic")
-    template = image_cfg.get("prompt_template")
-    prefix = _style_prefix(config)
-    card_label = f"Card {idx} of {total}" if total > 1 else ""
+    """Render the per-section image prompt from `config["prompts"]["image"]`.
 
-    highlights = _highlights_from_body(body)
-    themes = _themes_from_body(body)
+    The template owns all visual / layout / mascot / disclaimer / signature
+    copy. Code only fills runtime placeholders:
 
-    if template:
-        return template.format(
-            report_title=report_title,
-            date_range=date_range,
-            section_title=title,
-            card_label=card_label,
-            highlights=highlights,
-            themes=themes,
+        {report_title}    — config.report_title
+        {date_range}      — formatted run window, e.g. "2026/04/27 – 2026/04/28"
+        {section_title}   — heading of this section (often a stock name)
+        {idx} / {total}   — 1-based index and total card count
+        {card_label}      — "Card {idx} of {total}" when total > 1, else ""
+        {highlights}      — bullet list extracted from this section's body
+        {themes}          — clean prose excerpt of the body
+        {mascot}          — image_generation.mascot ('' if unset)
+        {disclaimer}      — image_generation.disclaimer ('' if unset)
+        {signature}       — image_generation.signature ('' if unset)
+
+    A missing prompts.image key raises a clear RuntimeError so users see
+    immediately that they need to add the template to their config.
+    """
+    template = (config.get("prompts") or {}).get("image")
+    if not template:
+        raise RuntimeError(
+            "Config is missing prompts.image — required for image generation. "
+            "Add a `prompts.image: |` template (see config.yaml.example)."
         )
 
-    chinese = _is_chinese(config)
-    signature = _signature_text(config)
-    disclaimer = _disclaimer_text(config)
-    mascot = _mascot_description(config)
-
-    if style == "illustration":
-        if chinese:
-            mascot_zh = (
-                f"卡片中放入一個吉祥物角色：{mascot}。"
-                "整組卡片中吉祥物的造型 / 顏色 / 比例必須完全一致，"
-                "可愛、友善的卡通風格，與背景色調搭配。"
-                if mascot else ""
-            )
-            footer_lines_zh: list[str] = []
-            if disclaimer:
-                footer_lines_zh.append(
-                    f"在卡片底部以小字、低調的方式放一行免責聲明「{disclaimer}」，"
-                    "字體比主視覺小很多，顏色為柔和的中性灰，不要遮蓋主畫面。"
-                )
-            if signature:
-                footer_lines_zh.append(
-                    f"在卡片右下角放一個小小的、低調的浮水印簽名「{signature}」，"
-                    "字體更小，半透明的中性灰。"
-                )
-            footer_zh = " ".join(footer_lines_zh)
-            return (
-                f"{'（' + card_label + '）' if card_label else ''}"
-                f"為《{report_title}》（{date_range}）的「{title}」段落設計一張 Instagram 插畫。"
-                f"{prefix} 主題內容：{themes} {mascot_zh} {footer_zh}"
-            )
-        footer_en_parts: list[str] = []
-        if disclaimer:
-            footer_en_parts.append(
-                f" Render a small disclaimer line '{disclaimer}' near the bottom — "
-                "small font, soft grey, deliberately understated."
-            )
-        if signature:
-            footer_en_parts.append(
-                f" Place a small, subtle signature '{signature}' in the bottom-right corner."
-            )
-        footer_en = "".join(footer_en_parts)
-        return (
-            f"{'(' + card_label + ') ' if card_label else ''}"
-            f"Instagram illustration for '{report_title}' ({date_range}), "
-            f"section '{title}'. {prefix} Themes: {themes}{footer_en}"
-        )
-
-    # Default: infographic summary card
-    if chinese:
-        zh_label = f"（{card_label}）" if card_label else ""
-        mascot_zh = ""
-        if mascot:
-            mascot_zh = (
-                f"\n吉祥物：在卡片角落放一個小小的吉祥物角色 — {mascot}。"
-                "請以可愛、友善的扁平卡通風格繪製，比例約佔卡片邊長的 12–18%，"
-                "位置可放在右上、左上或角落空白處（不要遮住主要文字）。"
-                "整組卡片中，這個吉祥物的造型、顏色、姿態風格必須**完全一致**，"
-                "讓所有卡片看起來像同一個角色出演的系列。"
-            )
-        footer_zh = ""
-        if disclaimer or signature:
-            lines = ["\n卡片底部依序放置以下兩行（如有）："]
-            if disclaimer:
-                lines.append(
-                    f"  1) 免責聲明「{disclaimer}」 — 使用比內文小的字體，"
-                    "顏色為柔和的中性灰，置中對齊，僅作為提醒，不要搶主視覺的焦點。"
-                )
-            if signature:
-                lines.append(
-                    f"  {2 if disclaimer else 1}) 簽名「{signature}」 — "
-                    "字體比免責聲明再小一點，使用淡藍色或柔和的灰色，置中或靠右對齊。"
-                )
-            footer_zh = "\n".join(lines)
-        return (
-            f"請為《{report_title}》（{date_range}）設計一張 Instagram 資訊卡片。\n"
-            f"{zh_label}段落主題：{title}\n\n"
-            f"請完整且清楚地呈現以下重點作為卡片主要內容（請逐條列出，全部使用繁體中文）：\n{highlights}\n\n"
-            f"視覺風格：{prefix}\n"
-            "排版：段落標題以粗體放在卡片頂部，每一個重點獨立成一行，"
-            "字體在手機上要清晰易讀；不要使用裝飾性元素干擾文字閱讀，留白要充足。"
-            f"{mascot_zh}"
-            f"{footer_zh}\n"
-            "重要：所有文字必須是正確的繁體中文（不可出現簡體字、亂碼、英文亂譯）。\n"
-            "嚴禁在卡片上出現任何 podcast、YouTube、節目、頻道、集數、主持人或來賓的名稱。"
-        )
-
-    mascot_en = ""
-    if mascot:
-        mascot_en = (
-            f"\nMascot: tuck a small recurring mascot into a corner — {mascot}. "
-            "Cute, flat cartoon style, ~12–18% of the card edge, positioned in a "
-            "corner so it doesn't overlap the main text. The mascot's design, "
-            "colours, and pose style must stay **identical** across every card "
-            "in the set so the carousel reads as one consistent character."
-        )
-    footer_en = ""
-    if disclaimer or signature:
-        footer_en_lines = ["\nFooter (in this order, near the very bottom of the card):"]
-        if disclaimer:
-            footer_en_lines.append(
-                f"  - Disclaimer line '{disclaimer}' in a small, soft-grey font, centred."
-            )
-        if signature:
-            footer_en_lines.append(
-                f"  - Signature '{signature}' below the disclaimer, even smaller, soft blue or muted grey."
-            )
-        footer_en = "\n".join(footer_en_lines)
-    return (
-        f"Design an Instagram summary card for '{report_title}' ({date_range}).\n"
-        f"{'(' + card_label + ') ' if card_label else ''}Section: {title}\n\n"
-        f"Display exactly these points as the main content:\n{highlights}\n\n"
-        f"Visual style: {prefix}\n"
-        "Layout: bold section title at top, each point on its own line, "
-        f"readable at mobile size. No decorative clutter — let the text breathe."
-        f"{mascot_en}{footer_en}"
+    image_cfg = config.get("image_generation") or {}
+    return template.format(
+        report_title=config.get("report_title", ""),
+        date_range=_format_date_range(folder_name),
+        section_title=title,
+        idx=idx,
+        total=total,
+        card_label=f"Card {idx} of {total}" if total > 1 else "",
+        highlights=_highlights_from_body(body),
+        themes=_themes_from_body(body),
+        mascot=str(image_cfg.get("mascot") or "").strip(),
+        disclaimer=str(image_cfg.get("disclaimer") or "").strip(),
+        signature=str(image_cfg.get("signature") or "").strip(),
     )
 
 

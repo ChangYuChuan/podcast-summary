@@ -235,20 +235,12 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
 
     # ── Discover mode: caption is a roll-call of the items covered ──────────
     if discover_mode:
-        discovery_cfg = config.get("discovery") or {}
         instagram_cfg = config.get("instagram") or {}
-
         blocks = _stocks_mode_blocks(summary)
+
         if chinese:
-            heading = (
-                discovery_cfg.get("caption_heading_zh")
-                or instagram_cfg.get("caption_heading_zh")
-                or "本期重點個股"
-            )
-            hashtags = (
-                instagram_cfg.get("hashtags_zh")
-                or "#股市 #投資 #台股 #美股 #個股分析 #財經"
-            )
+            heading = instagram_cfg.get("caption_heading_zh") or "本期重點"
+            hashtags = instagram_cfg.get("hashtags_zh") or ""
             parts = [f"🎙《{report_title}》", f"📅 {date_range}", ""]
             if blocks:
                 parts.append(f"📈 {heading}")
@@ -256,18 +248,12 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
                     one = _stock_oneliner(body)
                     parts.append(f"• {item_name} — {one}" if one else f"• {item_name}")
                 parts.append("")
-            parts.append(hashtags)
+            if hashtags:
+                parts.append(hashtags)
             return _trim_caption("\n".join(parts).rstrip())
 
-        heading = (
-            discovery_cfg.get("caption_heading_en")
-            or instagram_cfg.get("caption_heading_en")
-            or "Items covered"
-        )
-        hashtags = (
-            instagram_cfg.get("hashtags_en")
-            or "#digest #investing #stocks #markets"
-        )
+        heading = instagram_cfg.get("caption_heading_en") or "Items covered"
+        hashtags = instagram_cfg.get("hashtags_en") or ""
         parts = [f"🎙 {report_title}", f"📅 {date_range}", ""]
         if blocks:
             parts.append(heading)
@@ -275,7 +261,8 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
                 one = _stock_oneliner(body)
                 parts.append(f"• {item_name} — {one}" if one else f"• {item_name}")
             parts.append("")
-        parts.append(hashtags)
+        if hashtags:
+            parts.append(hashtags)
         return _trim_caption("\n".join(parts).rstrip())
 
     # ── Sections mode (default, unchanged) ─────────────────────────────────

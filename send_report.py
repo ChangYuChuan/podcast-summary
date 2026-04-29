@@ -161,96 +161,47 @@ def _is_chinese(lang: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Discover mode — one section per individual item the sources discussed.
-# Activated by `report_mode: discover` (alias: `report_mode: stocks`) in the
-# config. The discovery + detail prompts are fully overridable from config:
+# Activated by `report_mode: discover` in the config.
 #
-#   discovery:
-#     prompt: |
-#       <free-form NotebookLM query that returns a numbered list>
-#     detail_template: |
-#       <free-form NotebookLM query — must include {item} placeholder>
-#     caption_heading_zh: "本期重點個股"     # optional
-#     caption_heading_en: "Stocks covered"   # optional
+# Required config:
+#   prompts:
+#     discovery: |
+#       <NotebookLM query that returns a numbered list of items>
+#     detail: |
+#       <per-item NotebookLM query — must contain {item} placeholder>
 #
-# When the user doesn't override these, the defaults below produce a
-# stock-oriented digest (the original use case). The defaults are kept
-# composable so a custom prompt can pick which constraints to include.
+# No prompt content lives in the code — the config is the single source of
+# truth. Missing prompts raise a clear RuntimeError at run time.
 # ---------------------------------------------------------------------------
 
-# Phrasing to keep every prompt source-neutral. The generated post must not
-# tell readers where the analysis came from.
-_NEUTRAL_NOTE_ZH = (
-    "請務必保持來源中性："
-    "不要提及任何 podcast、YouTube 頻道、節目名稱、集數編號、主持人或來賓的名字。"
-    "請使用「資料來源」、「本期內容」這類中性詞彙，"
-    "也不要寫「在 XX 節目中提到」這種句式。"
-)
-
-# Back-compat alias for any external callers/tests.
-_STOCKS_NEUTRAL_NOTE = _NEUTRAL_NOTE_ZH
-
-_DEFAULT_DISCOVERY_PROMPT_ZH = (
-    "請列出資料來源中所有被討論到的個股、ETF 或公司，"
-    "範圍包含台股、美股、港股，以及指數型 / 主題型 ETF。\n"
-    "格式要求："
-    "  (1) 每一檔獨立成行，使用「1. Intel (INTC)」、「2. 台積電 (2330)」這種編號 + 中文 / 英文名稱 + 括號內代號的格式；"
-    "  (2) 同一檔股票只列一次，依資料中討論的份量由多到少排序；"
-    "  (3) 只列出實際被分析或評論的標的，不要憑空產生；"
-    "  (4) 至多列出 12 檔。\n"
-    f"{_NEUTRAL_NOTE_ZH}\n"
-    "請使用繁體中文回答。回答中只需列出個股清單，不要附加說明文字。"
-)
-
-_DEFAULT_DETAIL_TEMPLATE_ZH = (
-    "請針對「{item}」這一檔股票，根據資料來源中所有相關的討論，整理出一份客觀、中立的個股筆記。\n"
-    "請涵蓋以下五個面向，每一項使用獨立的項目符號（• 開頭），且每一個重點都必須是完整、自包含的句子：\n"
-    "  • 公司近況：用一兩句話說明資料來源在本期討論到這檔個股的背景或起因（例如最新事件、新品、財報、產業變化）。\n"
-    "  • 基本面與營運重點：3–5 點，例如業務進展、產品線、訂單能見度、毛利、研發進度等可驗證的事實。\n"
-    "  • 技術面 / 籌碼面：1–3 點，若資料中有提到價量、外資 / 投信動向、技術指標等。\n"
-    "  • 風險與需要關注的因素：1–3 點，包含產業風險、競爭、政策、總體環境等中性描述的不確定性。\n"
-    "  • 關鍵數字或近期催化劑：列出具體的數據、日期、價位、財報時點等資訊；若資料來源中沒有具體數字，請寫「資料來源未提供具體數字」。\n\n"
-    "重要：本筆記為客觀整理，**不要**寫出主觀的投資建議或定調，"
-    "嚴禁出現「看多」、「看空」、「中性」、「觀察」、「看好」、「不看好」、「建議買進」、「建議賣出」、"
-    "「進場」、「出場」、「目標價」、「值得布局」、「逢低買進」這類帶有評價或操作意涵的字眼。"
-    "如果資料來源中出現這類字眼，請改寫成中性的事實陳述（例如把「看好 Intel 轉型」改寫為「Intel 推進 IDM 2.0 策略，並擴大 18A 製程產能」）。\n"
-    f"{_NEUTRAL_NOTE_ZH}\n"
-    "請以直接陳述事實的方式撰寫，不要使用「主持人認為」、「節目中提到」、「他們建議」這類轉述語句。"
-    "答覆中不要保留 [1]、[1-3] 這類引用標記，也不要在重點中以「主因在於...」或「主要原因是...」這類沒有結尾的片段結束。"
-    "請使用繁體中文回答。"
-)
-
-# Back-compat aliases for external callers / tests that imported the old names.
-_STOCK_DISCOVERY_PROMPT_ZH = _DEFAULT_DISCOVERY_PROMPT_ZH
-_STOCK_DETAIL_PROMPT_ZH_TEMPLATE = _DEFAULT_DETAIL_TEMPLATE_ZH
-
-# Numbered-list parser for the discovery query. Accepts:
-#   1. Intel (INTC)
-#   2、 台積電 (2330)
-#   3) NVIDIA
+# Numbered-list parser for the discovery answer. Accepts the common bullet
+# forms NotebookLM emits:  "1. Intel"   "2、 台積電"   "3) NVIDIA"
 _DISCOVERY_LINE_PATTERN = re.compile(r"^\s*\d+\s*[.、)）]\s*(.+?)\s*$", re.MULTILINE)
-# Back-compat alias
-_STOCK_LINE_PATTERN = _DISCOVERY_LINE_PATTERN
-
-
-def _discover_config(config: dict) -> dict:
-    """Return the `discovery:` config block, falling back to legacy keys."""
-    block = config.get("discovery") or {}
-    if not isinstance(block, dict):
-        block = {}
-    return block
 
 
 def _resolve_discovery_prompt(config: dict) -> str:
-    return _discover_config(config).get("prompt") or _DEFAULT_DISCOVERY_PROMPT_ZH
+    p = (config.get("prompts") or {}).get("discovery")
+    if not p:
+        raise RuntimeError(
+            "Config is missing prompts.discovery — required when report_mode: discover. "
+            "Add a `prompts.discovery: |` block to the config."
+        )
+    return p
 
 
 def _resolve_detail_template(config: dict) -> str:
-    template = _discover_config(config).get("detail_template") or _DEFAULT_DETAIL_TEMPLATE_ZH
-    if "{item}" not in template:
+    t = (config.get("prompts") or {}).get("detail")
+    if not t:
         raise RuntimeError(
-            "discovery.detail_template must contain a {item} placeholder for the per-item name."
+            "Config is missing prompts.detail — required when report_mode: discover. "
+            "Add a `prompts.detail: |` block to the config."
         )
-    return template
+    if "{item}" not in t:
+        raise RuntimeError(
+            "prompts.detail must contain a {item} placeholder so each discovered "
+            "item can be substituted into the per-item query."
+        )
+    return t
 
 
 def _discover_items(nlm_path: str, notebook_id: str, config: dict) -> list[str]:
@@ -259,7 +210,6 @@ def _discover_items(nlm_path: str, notebook_id: str, config: dict) -> list[str]:
     candidates = [m.group(1).strip() for m in _DISCOVERY_LINE_PATTERN.finditer(raw)]
     seen, ordered = set(), []
     for c in candidates:
-        # Strip trailing markdown emphasis
         c = re.sub(r"^\*+|\*+$", "", c).strip()
         key = c.lower()
         if key and key not in seen:
@@ -268,17 +218,11 @@ def _discover_items(nlm_path: str, notebook_id: str, config: dict) -> list[str]:
     return ordered
 
 
-# Back-compat shim — older callers used `_discover_stocks(nlm_path, notebook_id)`.
-def _discover_stocks(nlm_path: str, notebook_id: str) -> list[str]:
-    return _discover_items(nlm_path, notebook_id, {})
-
-
 def query_per_item_sections(nlm_path: str, notebook_id: str, config: dict) -> str:
     """Discover-mode report: one ## section per item the sources discussed.
 
-    Both the discovery prompt and per-item detail template come from
-    `config.discovery` when present; otherwise fall back to the built-in
-    Chinese stocks-oriented defaults so existing configs keep working.
+    Both the discovery prompt and per-item detail template are read from
+    `config.prompts` — see _resolve_discovery_prompt / _resolve_detail_template.
 
     Caps the number of items at `image_generation.max_images` (default 10)
     so the resulting image set stays within Instagram's carousel limit.
@@ -305,11 +249,6 @@ def query_per_item_sections(nlm_path: str, notebook_id: str, config: dict) -> st
         parts.append(f"## {item}\n\n{answer}")
         print(f"    → {len(answer):,} chars")
     return "\n\n---\n\n".join(parts)
-
-
-# Back-compat alias.
-def query_per_stock_sections(nlm_path: str, notebook_id: str, config: dict) -> str:
-    return query_per_item_sections(nlm_path, notebook_id, config)
 
 
 # ---------------------------------------------------------------------------
