@@ -27,9 +27,14 @@ if not set. All image URLs must be publicly accessible — the OpenAI-hosted URL
 """
 
 import os
+import re
 import time
 
 import requests
+
+
+# Instagram caption hard cap is 2,200 chars; keep well below to leave headroom.
+MAX_CAPTION_CHARS = 2_000
 
 
 def _format_date_range(folder_name: str) -> str:
@@ -40,21 +45,134 @@ def _format_date_range(folder_name: str) -> str:
         return folder_name
 
 
-def _build_caption(config: dict, folder_name: str) -> str:
+def _is_chinese(config: dict) -> bool:
+    lang = config.get("instagram", {}).get("language") or config.get(
+        "whisper_language", "en"
+    )
+    return lang.lower().startswith("zh")
+
+
+def _section_blocks(summary: str) -> list[tuple[str, str]]:
+    """Split the report into [(title, body)] pairs."""
+    blocks = []
+    for chunk in summary.split("\n\n---\n\n"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        lines = chunk.splitlines()
+        title = lines[0].lstrip("#").strip()
+        body = "\n".join(lines[1:]).strip()
+        if title and body:
+            blocks.append((title, body))
+    return blocks
+
+
+def _bullets(body: str, max_items: int) -> list[str]:
+    """Pull up to max_items bullet-style lines from a section body, cleaned."""
+    items: list[str] = []
+    for line in body.splitlines():
+        line = line.strip()
+        m = re.match(r"^[-*•]\s+(.+)$", line) or re.match(r"^\d+\.\s+(.+)$", line)
+        if not m:
+            continue
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", m.group(1)).strip()
+        text = re.sub(r"\s+", " ", text)
+        if len(text) > 110:
+            text = text[:107] + "…"
+        if text:
+            items.append(text)
+        if len(items) >= max_items:
+            break
+    return items
+
+
+def _looks_like_stocks_section(title: str) -> bool:
+    t = title.lower()
+    return (
+        "stock" in t
+        or "ticker" in t
+        or "個股" in title
+        or "股票" in title
+        or "推薦" in title
+    )
+
+
+def _stocks_lines(summary: str, max_items: int = 8) -> list[str]:
+    """Pull bullet lines from the 'Stocks Mentioned' / '本期提到的個股' section, if any."""
+    for title, body in _section_blocks(summary):
+        if _looks_like_stocks_section(title):
+            return _bullets(body, max_items)
+    return []
+
+
+def _highlight_lines(summary: str, per_section: int = 2, total: int = 6) -> list[str]:
+    """Pull a few bullets from non-stocks sections to give the caption substance."""
+    items: list[str] = []
+    for title, body in _section_blocks(summary):
+        if _looks_like_stocks_section(title):
+            continue
+        for b in _bullets(body, per_section):
+            items.append(b)
+            if len(items) >= total:
+                return items
+    return items
+
+
+def _trim_caption(text: str) -> str:
+    if len(text) <= MAX_CAPTION_CHARS:
+        return text
+    return text[: MAX_CAPTION_CHARS - 1].rstrip() + "…"
+
+
+def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
     ig_cfg = config.get("instagram", {})
     report_title = config.get("report_title", "Podcast Digest")
     date_range = _format_date_range(folder_name)
+    chinese = _is_chinese(config)
 
     template = ig_cfg.get("caption_template")
     if template:
-        return template.format(report_title=report_title, date_range=date_range)
+        return _trim_caption(
+            template.format(report_title=report_title, date_range=date_range)
+        )
 
-    return (
-        f"🎙 {report_title}\n"
-        f"{date_range}\n\n"
-        "Weekly podcast digest — full summary delivered to subscribers.\n"
-        "#podcast #weekly #digest #ai"
-    )
+    stocks = _stocks_lines(summary) if summary else []
+    highlights = _highlight_lines(summary) if summary else []
+
+    if chinese:
+        parts = [
+            f"🎙《{report_title}》",
+            f"📅 {date_range}",
+            "",
+        ]
+        if highlights:
+            parts.append("📝 本期重點")
+            parts.extend(f"• {h}" for h in highlights)
+            parts.append("")
+        if stocks:
+            parts.append("📈 本期提到的個股")
+            parts.extend(f"• {s}" for s in stocks)
+            parts.append("")
+        parts.append("完整內容詳見每日電子報。")
+        parts.append("#股市 #投資 #台股 #美股 #podcast #財經")
+        return _trim_caption("\n".join(parts))
+
+    parts = [
+        f"🎙 {report_title}",
+        f"📅 {date_range}",
+        "",
+    ]
+    if highlights:
+        parts.append("Highlights")
+        parts.extend(f"• {h}" for h in highlights)
+        parts.append("")
+    if stocks:
+        parts.append("Stocks mentioned")
+        parts.extend(f"• {s}" for s in stocks)
+        parts.append("")
+    parts.append("Full digest delivered to subscribers.")
+    parts.append("#podcast #digest #investing #stocks")
+    return _trim_caption("\n".join(parts))
 
 
 def _check_response(resp: requests.Response, action: str) -> None:
@@ -196,12 +314,21 @@ def _resolve_user_id(base_url: str, access_token: str, ig_cfg: dict) -> str:
     return user_id
 
 
-def post(config: dict, image_urls: list[str], folder_name: str) -> str:
+def post(
+    config: dict,
+    image_urls: list[str],
+    folder_name: str,
+    summary: str | None = None,
+) -> str:
     """Post images to Instagram. Returns the published media ID.
 
     Automatically selects single-image or carousel based on the number of URLs.
     The Instagram user ID is read from config; if absent it is auto-discovered
     from the access token via GET /me.
+
+    When summary is provided, the caption is built from the report's actual
+    content (highlights + stocks-mentioned section) instead of a generic
+    boilerplate.
     """
     ig_cfg = config.get("instagram", {})
 
@@ -221,7 +348,7 @@ def post(config: dict, image_urls: list[str], folder_name: str) -> str:
     api_version = ig_cfg.get("api_version", "v21.0")
     base_url = f"https://graph.instagram.com/{api_version}"
     user_id = _resolve_user_id(base_url, access_token, ig_cfg)
-    caption = _build_caption(config, folder_name)
+    caption = _build_caption(config, folder_name, summary)
 
     if len(image_urls) == 1:
         print(f"  Posting single image …")

@@ -113,6 +113,14 @@ def _themes_from_body(body: str) -> str:
 # Prompt construction
 # ---------------------------------------------------------------------------
 
+def _is_chinese(config: dict) -> bool:
+    """Return True when the report's working language is Chinese."""
+    lang = config.get("image_generation", {}).get("language") or config.get(
+        "whisper_language", "en"
+    )
+    return lang.lower().startswith("zh")
+
+
 def _style_prefix(config: dict) -> str:
     """Shared visual-style description applied to every image in the set.
 
@@ -122,10 +130,23 @@ def _style_prefix(config: dict) -> str:
     image_cfg = config.get("image_generation", {})
     if image_cfg.get("style_base"):
         return image_cfg["style_base"]
+    chinese = _is_chinese(config)
     if image_cfg.get("style", "infographic") == "illustration":
+        if chinese:
+            return (
+                "編輯雜誌風格插畫。色彩鮮豔飽滿，強烈的概念意象，焦點集中。"
+                "整張圖不要出現任何文字或字符。"
+            )
         return (
             "Editorial magazine illustration. Vibrant saturated colours, bold conceptual "
             "imagery, strong focal point. No text or words anywhere."
+        )
+    if chinese:
+        return (
+            "簡潔的 Instagram 資訊卡片，方形 1:1 構圖。"
+            "白色或淺米色背景，搭配一個重點色（深藍或紅色）。"
+            "邊距留白寬鬆，所有文字皆使用清晰、易讀的繁體中文無襯線字型（例如思源黑體 / Noto Sans TC）。"
+            "嚴禁出現任何簡體中文字，所有字皆需為繁體中文。"
         )
     return (
         "Clean Instagram infographic card. Minimal background (white or light cream), "
@@ -203,7 +224,15 @@ def _build_section_prompt(
             themes=themes,
         )
 
+    chinese = _is_chinese(config)
+
     if style == "illustration":
+        if chinese:
+            return (
+                f"{'（' + card_label + '）' if card_label else ''}"
+                f"為《{report_title}》（{date_range}）的「{title}」段落設計一張 Instagram 插畫。"
+                f"{prefix} 主題內容：{themes}"
+            )
         return (
             f"{'(' + card_label + ') ' if card_label else ''}"
             f"Instagram illustration for '{report_title}' ({date_range}), "
@@ -211,6 +240,18 @@ def _build_section_prompt(
         )
 
     # Default: infographic summary card
+    if chinese:
+        zh_label = f"（{card_label}）" if card_label else ""
+        return (
+            f"請為《{report_title}》（{date_range}）設計一張 Instagram 資訊卡片。\n"
+            f"{zh_label}段落主題：{title}\n\n"
+            f"請完整且清楚地呈現以下重點作為卡片主要內容（請逐條列出，全部使用繁體中文）：\n{highlights}\n\n"
+            f"視覺風格：{prefix}\n"
+            "排版：段落標題以粗體放在卡片頂部，每一個重點獨立成一行，"
+            "字體在手機上要清晰易讀；不要使用裝飾性元素干擾文字閱讀，留白要充足。\n"
+            "重要：所有文字必須是正確的繁體中文（不可出現簡體字、亂碼、英文亂譯）。"
+        )
+
     return (
         f"Design an Instagram summary card for '{report_title}' ({date_range}).\n"
         f"{'(' + card_label + ') ' if card_label else ''}Section: {title}\n\n"

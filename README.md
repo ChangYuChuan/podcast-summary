@@ -1,8 +1,8 @@
 # podcast-summary (`psum`)
 
-A command-line tool that automatically fetches podcast episodes, transcribes them with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), uploads transcripts to [NotebookLM](https://notebooklm.google.com), and emails a styled AI-generated report — all on a configurable cron schedule.
+A command-line tool that automatically fetches podcast episodes **and YouTube channel videos**, transcribes them with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (or YouTube captions when available), uploads everything to [NotebookLM](https://notebooklm.google.com), and produces a styled AI-generated report — emailed to subscribers, optionally with **AI-generated cover images** posted to Instagram as a carousel — all on a configurable cron schedule.
 
-Each config file is a fully independent pipeline. You can run multiple configs (different feeds, different schedules, different recipients) from a single installation.
+Each config file is a fully independent pipeline. Reports default to **English or Traditional Chinese** based on `whisper_language`, and a built-in "Stocks Mentioned" section extracts every ticker the hosts discuss along with their stance.
 
 ---
 
@@ -14,10 +14,10 @@ fetch → transcribe → upload → report → cleanup
 
 | Stage | What happens |
 |---|---|
-| **fetch** | Parses RSS feeds, finds episodes within `lookback_days`, downloads audio |
-| **transcribe** | Runs faster-whisper locally, produces per-episode `.txt` transcripts |
+| **fetch** | Parses RSS feeds + YouTube channels (videos & livestreams), finds episodes within `lookback_days`. RSS audio is downloaded directly; YouTube videos try the caption API first and fall back to `yt-dlp` audio download |
+| **transcribe** | Runs faster-whisper locally on any audio file that didn't already get a caption-API transcript |
 | **upload** | Creates a fresh NotebookLM notebook and uploads all transcripts |
-| **report** | Queries the notebook section-by-section, renders a styled HTML email, optionally generates images and posts to Instagram |
+| **report** | Queries the notebook section-by-section (defaults to Chinese sections when `whisper_language: zh`), renders a styled HTML email, optionally generates one cover image per section via OpenAI and posts them as an Instagram carousel |
 | **cleanup** | Deletes audio/transcript/report files older than the configured retention period |
 
 ---
@@ -25,10 +25,12 @@ fetch → transcribe → upload → report → cleanup
 ## Requirements
 
 - **Python 3.11+**
-- A **Gmail account** with an [App Password](https://support.google.com/accounts/answer/185833) for SMTP
+- A **Gmail account** with an [App Password](https://support.google.com/accounts/answer/185833) for SMTP (only if you want emails sent — `email.enabled: false` skips this)
 - A **Google account** for NotebookLM (browser OAuth via `psum nlm-login`)
 - _(Optional)_ **OpenAI API key** for cover image generation
 - _(Optional)_ **Instagram Business/Creator account** + long-lived access token for Instagram posting
+
+`ffmpeg` is bundled via the `imageio-ffmpeg` Python wheel — no system install required for YouTube audio post-processing.
 
 ---
 
@@ -160,16 +162,18 @@ retention:
 
 ### Cover image generation (OpenAI)
 
-Generates one image per report section (infographic cards or illustrations), suitable for an Instagram carousel.
+Generates one image per report section (infographic cards or illustrations), suitable for an Instagram carousel. Prompts are written in Traditional Chinese automatically when `whisper_language: zh`.
 
 ```yaml
 image_generation:
   enabled: true
   model: gpt-image-2          # or dall-e-3
   size: 1024x1024
-  quality: standard           # standard | hd
+  quality: medium             # gpt-image-2: low | medium | high | auto
+                              # dall-e-3:    standard | hd
   style: infographic          # infographic (summary card) | illustration (abstract art)
   max_images: 10              # cap — one image per report section
+  language: ""                # optional: override (defaults to whisper_language)
   style_base: ""              # optional: shared visual style for consistency across all cards
   # prompt_template: "..."    # optional override; placeholders: {report_title} {date_range}
   #                           #   {section_title} {card_label} {highlights} {themes}
@@ -179,16 +183,20 @@ image_generation:
 export OPENAI_API_KEY="sk-..."   # add to ~/.zprofile
 ```
 
+**Note:** `gpt-image-2` (and the `gpt-image-*` family) only return base64 image data. To bridge the gap to Instagram's Graph API — which requires a publicly-fetchable URL — generated images are saved locally **and** uploaded to [catbox.moe](https://catbox.moe) (no auth required, persistent URLs). The catbox URL is what gets sent to Instagram. `dall-e-3` returns a hosted URL directly and skips this step.
+
 ### Instagram posting
 
-Posts images as a single post (1 image) or carousel (2+ images).
+Posts images as a single post (1 image) or carousel (2+ images). The caption is built from the actual report content — top highlights and the stocks-mentioned section — instead of a generic placeholder. Caption language follows `whisper_language` (Chinese or English) unless `caption_template` is set explicitly.
 
 ```yaml
 instagram:
   enabled: true
   # user_id is optional — auto-discovered from the token via GET /me
   api_version: v21.0
+  language: ""                # optional: override (defaults to whisper_language)
   # caption_template: "🎙 {report_title}\n{date_range}\n#podcast"
+  #                           # placeholders: {report_title} {date_range}
 ```
 
 ```bash
@@ -209,7 +217,14 @@ report_sections:
     prompt: "List the most important takeaways and recommendations."
 ```
 
-If omitted, a built-in 3-section English template is used.
+If omitted, a built-in 4-section template is used:
+
+1. **Episode Summaries** / 本期節目摘要
+2. **Key Themes & Insights** / 重點主題與洞察
+3. **Stocks Mentioned** / 本期提到的個股 — extracts every ticker, ETF, or company the hosts discuss with their stance (bullish / bearish / watch) and the reason given
+4. **Takeaways & Action Items** / 重點結論與行動建議
+
+The Chinese template is used automatically when `whisper_language: zh` (or `zh-TW` / `zh-Hant`); otherwise the English template is used. Each section is queried independently against the NotebookLM notebook.
 
 ---
 
