@@ -6,13 +6,13 @@ psum — Podcast Summary CLI.
 
 Usage:
   psum --help
-  psum init                          # Interactive setup wizard
-  psum run [options]                 # Run the pipeline
-  psum podcast list/add/remove       # Manage podcast feeds
-  psum receiver list/add/remove      # Manage email recipients
-  psum cron install/remove/status    # Manage cron jobs
-  psum config show/set               # View/update config values
-  psum mcp                           # Start the MCP server
+  psum init                              # Interactive setup wizard
+  psum run [CONFIG] [options]            # Run the full pipeline
+  psum publish [CONFIG] --folder X       # Re-publish images + IG from a saved report
+  psum cron install/remove/status        # Manage cron jobs
+  psum config show/set                   # View/update config values
+  psum nlm-login                         # Authenticate with NotebookLM
+  psum mcp                               # Start the MCP server
 """
 
 import os
@@ -186,7 +186,7 @@ def _install_cron_job(schedule: str, config_path: Path, name: str) -> None:
 )
 @click.pass_context
 def main(ctx, config):
-    """Podcast Summary — manage pipeline, feeds, recipients, and scheduling."""
+    """Podcast Summary — run the pipeline, manage configs, and schedule cron jobs."""
     ctx.ensure_object(dict)
     ctx.obj["config"] = Path(config)
 
@@ -795,124 +795,47 @@ def run_cmd(ctx, config_name, skip_fetch, skip_transcribe, skip_report, skip_cle
     sys.exit(result.returncode)
 
 
-# ─── podcast ──────────────────────────────────────────────────────────────────
+# ─── publish ──────────────────────────────────────────────────────────────────
 
-@main.group()
-def podcast():
-    """Manage podcast feeds."""
-    pass
-
-
-@podcast.command("list")
+@main.command("publish")
+@click.argument("config_name", required=False, default=None,
+                metavar="[CONFIG]")
+@click.option("--folder", required=True,
+              help="Run folder containing the saved report, e.g. 20260428-20260429.")
 @click.pass_context
-def podcast_list(ctx):
-    """Print all configured podcast feeds."""
-    cfg = _load_cfg(ctx.obj["config"])
-    feeds = cfg.get("feeds", [])
-    if not feeds:
-        click.echo("No feeds configured.")
-        return
-    for i, feed in enumerate(feeds, 1):
-        click.echo(f"  {i}. {feed['name']}")
-        click.echo(f"     {feed['url']}")
+def publish_cmd(ctx, config_name, folder):
+    """Generate images + post to Instagram from an already-saved report.
 
+    Skips fetch, transcribe, NotebookLM, and email entirely. Reads the
+    report file at {source_folder}/reports/{folder}/report_{folder}.txt
+    and runs only the image-generation and Instagram-posting stages.
 
-@podcast.command("add")
-@click.argument("name")
-@click.argument("url")
-@click.pass_context
-def podcast_add(ctx, name, url):
-    """Add a podcast feed."""
-    config_path = ctx.obj["config"]
+    Useful for re-publishing after tweaking prompts.image, the mascot,
+    the disclaimer, or any other image-side config — without burning
+    another round of NotebookLM queries.
+
+    Examples:
+      psum publish daily-ig-stock-report --folder 20260428-20260429
+      psum publish --folder 20260428-20260429   # picker if multiple configs
+    """
+    config_path = _resolve_config(ctx.obj["config"], config_name)
     cfg = _load_cfg(config_path)
-    feeds = cfg.setdefault("feeds", [])
-    for feed in feeds:
-        if feed["name"] == name:
-            click.echo(f"Feed '{name}' already exists.")
-            return
-    feeds.append({"name": name, "url": url})
-    _save_cfg(config_path, cfg)
-    click.echo(f"Added: {name}")
+    project_root = Path(cfg["project_root"]) if cfg.get("project_root") else PROJECT_ROOT
+    python_bin = project_root / "venv" / "bin" / "python3"
+    pipeline_py = project_root / "pipeline.py"
 
+    if not python_bin.exists():
+        click.echo(f"Error: Pipeline Python not found at {python_bin}", err=True)
+        sys.exit(1)
 
-@podcast.command("remove")
-@click.argument("name")
-@click.pass_context
-def podcast_remove(ctx, name):
-    """Remove a podcast feed by name."""
-    config_path = ctx.obj["config"]
-    cfg = _load_cfg(config_path)
-    feeds = cfg.get("feeds", [])
-    new_feeds = [f for f in feeds if f["name"] != name]
-    if len(new_feeds) == len(feeds):
-        click.echo(f"Feed '{name}' not found.")
-        return
-    cfg["feeds"] = new_feeds
-    _save_cfg(config_path, cfg)
-    click.echo(f"Removed: {name}")
-
-
-# ─── receiver ─────────────────────────────────────────────────────────────────
-
-@main.group()
-def receiver():
-    """Manage email recipients."""
-    pass
-
-
-@receiver.command("list")
-@click.pass_context
-def receiver_list(ctx):
-    """Print all configured email recipients."""
-    cfg = _load_cfg(_pick_config(ctx.obj["config"]))
-    to = cfg.get("email", {}).get("to", "")
-    if not to:
-        click.echo("No recipients configured.")
-        return
-    recipients = to if isinstance(to, list) else [to]
-    for i, email in enumerate(recipients, 1):
-        click.echo(f"  {i}. {email}")
-
-
-@receiver.command("add")
-@click.argument("email_addr")
-@click.pass_context
-def receiver_add(ctx, email_addr):
-    """Add an email recipient."""
-    config_path = _pick_config(ctx.obj["config"])
-    cfg = _load_cfg(config_path)
-    email_cfg = cfg.setdefault("email", {})
-    to = email_cfg.get("to", "")
-    recipients = to if isinstance(to, list) else ([to] if to else [])
-    if email_addr in recipients:
-        click.echo(f"'{email_addr}' is already in the recipient list.")
-        return
-    recipients.append(email_addr)
-    email_cfg["to"] = recipients if len(recipients) > 1 else recipients[0]
-    _save_cfg(config_path, cfg)
-    click.echo(f"Added: {email_addr}")
-
-
-@receiver.command("remove")
-@click.argument("email_addr")
-@click.pass_context
-def receiver_remove(ctx, email_addr):
-    """Remove an email recipient."""
-    config_path = _pick_config(ctx.obj["config"])
-    cfg = _load_cfg(config_path)
-    email_cfg = cfg.setdefault("email", {})
-    to = email_cfg.get("to", "")
-    recipients = to if isinstance(to, list) else ([to] if to else [])
-    new_recipients = [r for r in recipients if r != email_addr]
-    if len(new_recipients) == len(recipients):
-        click.echo(f"'{email_addr}' not found in recipient list.")
-        return
-    email_cfg["to"] = (
-        new_recipients if len(new_recipients) > 1 else
-        (new_recipients[0] if new_recipients else "")
-    )
-    _save_cfg(config_path, cfg)
-    click.echo(f"Removed: {email_addr}")
+    cmd = [
+        str(python_bin), str(pipeline_py),
+        "--config", str(config_path),
+        "--publish-only",
+        "--folder", folder,
+    ]
+    result = subprocess.run(cmd, cwd=str(project_root))
+    sys.exit(result.returncode)
 
 
 # ─── cron ─────────────────────────────────────────────────────────────────────

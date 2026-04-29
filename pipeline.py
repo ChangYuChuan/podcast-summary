@@ -183,21 +183,42 @@ def run_email(
     send_email_flag: bool | None = None,
     generate_image_flag: bool | None = None,
     post_instagram_flag: bool | None = None,
-) -> bool:
+) -> "dict | bool":
+    """Run the report stage. Returns the per-substage dict from send_report.run()
+    on success ({"email": ..., "image": ..., "instagram": ...}), False on crash."""
     import send_report
     banner("STAGE 4 — Generate Report & Send Email")
     t = time.time()
     try:
-        send_report.run(
+        substages = send_report.run(
             config, folder_name, notebook_id,
             send_email_flag=send_email_flag,
             generate_image_flag=generate_image_flag,
             post_instagram_flag=post_instagram_flag,
         )
-        print(f"\n[email] Done in {elapsed(t)}")
-        return True
+        print(f"\n[report] Done in {elapsed(t)}")
+        return substages
     except Exception:
-        print("\n[email] FAILED:")
+        print("\n[report] FAILED:")
+        traceback.print_exc()
+        return False
+
+
+def run_publish(config: dict, folder_name: str) -> "dict | bool":
+    """Run only the image + Instagram stages against an already-saved report.
+    Skips fetch / transcribe / upload / email entirely."""
+    import send_report
+    banner("STAGE — Publish (image + Instagram from saved report)")
+    t = time.time()
+    try:
+        substages = send_report.publish_existing_report(config, folder_name)
+        print(f"\n[publish] Done in {elapsed(t)}")
+        return substages
+    except FileNotFoundError as exc:
+        print(f"\n[publish] FAILED: {exc}")
+        return False
+    except Exception:
+        print("\n[publish] FAILED:")
         traceback.print_exc()
         return False
 
@@ -366,6 +387,10 @@ def main() -> None:
                         help="Skip cover image generation (overrides image_generation.enabled in config).")
     parser.add_argument("--skip-instagram", action="store_true",
                         help="Skip Instagram posting (overrides instagram.enabled in config).")
+    parser.add_argument("--publish-only", action="store_true",
+                        help="Skip everything except image generation and Instagram posting; "
+                             "use the report file already saved at the run folder. "
+                             "Useful for re-publishing after tweaking prompts or config.")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -375,23 +400,57 @@ def main() -> None:
     if args.notebook_id:
         args.skip_upload = True
 
+    # --publish-only is a fast path: skip everything except image + IG.
+    if args.publish_only:
+        args.skip_fetch = True
+        args.skip_transcribe = True
+        args.skip_upload = True
+        args.skip_email = True
+        args.skip_cleanup = True
+
     pipeline_start = time.time()
+
+    # Build the active-stages list for the header so the user sees exactly
+    # what this invocation will do (including the report sub-stages).
+    image_cfg_enabled = config.get("image_generation", {}).get("enabled", False) and not args.skip_image
+    ig_cfg_enabled    = config.get("instagram", {}).get("enabled", False) and not args.skip_instagram
+    email_cfg_enabled = (
+        config.get("email", {}).get("enabled", True)
+        and not args.skip_email
+        and not args.save_report_only
+    )
+    stages_active: list[str] = []
+    if not args.skip_fetch:      stages_active.append("fetch")
+    if not args.skip_transcribe: stages_active.append("transcribe")
+    if not args.skip_upload:     stages_active.append("upload")
+    if not args.skip_email:      stages_active.append("report")
+    if email_cfg_enabled:        stages_active.append("email")
+    if image_cfg_enabled:        stages_active.append("image")
+    if ig_cfg_enabled:           stages_active.append("instagram")
+    if not args.skip_cleanup:    stages_active.append("cleanup")
 
     print()
     print("╔══════════════════════════════════════════════════════════╗")
-    print("║           Stock Weekly Report — Pipeline                 ║")
+    print("║                     Pipeline                             ║")
     print("╚══════════════════════════════════════════════════════════╝")
     print(f"  Config     : {args.config}")
     print(f"  Run folder : {folder_name}")
-    print(f"  Stages     : "
-          + ("fetch " if not args.skip_fetch else "")
-          + ("transcribe " if not args.skip_transcribe else "")
-          + ("upload " if not args.skip_upload else "")
-          + ("email " if not args.skip_email else "")
-          + ("cleanup" if not args.skip_cleanup else ""))
+    print(f"  Stages     : {' '.join(stages_active) if stages_active else '(none)'}")
 
     results: dict[str, bool | str] = {}
     notebook_id: str | None = args.notebook_id
+
+    # ── Publish-only: read the existing saved report and run image + IG ─
+    if args.publish_only:
+        sub = run_publish(config, folder_name)
+        if isinstance(sub, dict):
+            results.update(sub)
+        else:
+            results["publish"] = False
+        _print_summary(results, pipeline_start)
+        if not isinstance(sub, dict):
+            sys.exit(1)
+        return
 
     # ── Stage 1: Fetch ──────────────────────────────────────────────
     if not args.skip_fetch:
@@ -436,22 +495,31 @@ def main() -> None:
     else:
         results["upload"] = "skipped"
 
-    # ── Stage 4: Report & Email ─────────────────────────────────────
+    # ── Stage 4: Report (query → save → email → image → instagram) ──
     if not args.skip_email:
         if not notebook_id:
-            print("\n[email] Skipped: no notebook ID available (upload was skipped).")
-            print("  Re-run with --notebook-id <id> to send the email separately.")
+            print("\n[report] Skipped: no notebook ID available (upload was skipped).")
+            print("  Re-run with --notebook-id <id> to run the report separately.")
             results["email"] = "skipped"
+            results["image"] = "skipped"
+            results["instagram"] = "skipped"
         else:
-            ok = run_email(
+            sub = run_email(
                 config, folder_name, notebook_id,
                 send_email_flag=False if args.save_report_only else None,
                 generate_image_flag=False if args.skip_image else None,
                 post_instagram_flag=False if args.skip_instagram else None,
             )
-            results["email"] = ok
+            if isinstance(sub, dict):
+                results.update(sub)  # fans out into "email", "image", "instagram"
+            else:
+                results["email"] = False
+                results["image"] = "skipped"
+                results["instagram"] = "skipped"
     else:
         results["email"] = "skipped"
+        results["image"] = "skipped"
+        results["instagram"] = "skipped"
 
     # ── Cleanup: Remove old audio / transcripts / reports ───────────
     if not args.skip_cleanup:
@@ -461,7 +529,8 @@ def main() -> None:
         results["cleanup"] = "skipped"
 
     _print_summary(results, pipeline_start)
-    if results.get("upload") is False or results.get("email") is False:
+    # A False (failure) in any stage is fatal. "skipped" / True / "partial" are not.
+    if any(v is False for v in results.values()):
         sys.exit(1)
 
 

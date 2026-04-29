@@ -364,7 +364,7 @@ def list_reports(config: Optional[str] = None) -> str:
 
     lines = ["Available reports (newest first):"]
     for f in folders:
-        has_report = (reports_dir / f / f"weekly_report_{f}.txt").exists()
+        has_report = (reports_dir / f / f"report_{f}.txt").exists()
         run_status = _read_status(runs_dir / f / "status.json").get("status", "")
         status_tag = f"  [{run_status}]" if run_status else ""
         report_tag = "✓ report" if has_report else "no report file"
@@ -375,7 +375,7 @@ def list_reports(config: Optional[str] = None) -> str:
 
 @mcp.tool()
 def get_report(folder: Optional[str] = None, config: Optional[str] = None) -> str:
-    """Get the content of a saved weekly report.
+    """Get the content of a saved report.
 
     Args:
         folder: Report folder name, e.g. '20260218-20260225'. Defaults to the latest.
@@ -395,7 +395,14 @@ def get_report(folder: Optional[str] = None, config: Optional[str] = None) -> st
             return "No reports found."
         folder = folders[0]
 
-    report_path = reports_dir / folder / f"weekly_report_{folder}.txt"
+    # Accept the legacy `weekly_report_*` name for reports saved before
+    # the rename, in addition to the new `report_*`.
+    base_dir = reports_dir / folder
+    candidates = [
+        base_dir / f"report_{folder}.txt",
+        base_dir / f"weekly_report_{folder}.txt",
+    ]
+    report_path = next((p for p in candidates if p.exists()), candidates[0])
     if not report_path.exists():
         return f"Report not found: {report_path}"
 

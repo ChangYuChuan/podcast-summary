@@ -637,10 +637,103 @@ def save_report(config: dict, folder_name: str, body: str) -> Path:
     """Save the report text to disk and return the file path."""
     report_dir = Path(config["source_folder"]) / "reports" / folder_name
     report_dir.mkdir(parents=True, exist_ok=True)
-    report_path = report_dir / f"weekly_report_{folder_name}.txt"
+    report_path = report_dir / f"report_{folder_name}.txt"
     report_path.write_text(body, encoding="utf-8")
     print(f"  Report saved to: {report_path}")
     return report_path
+
+
+def _find_existing_report(config: dict, folder_name: str) -> Path:
+    """Return the path of a saved report for `folder_name`.
+
+    Accepts both the current `report_*.txt` filename and the legacy
+    `weekly_report_*.txt` from before the rename. Raises FileNotFoundError
+    when neither is present.
+    """
+    report_dir = Path(config["source_folder"]) / "reports" / folder_name
+    candidates = [
+        report_dir / f"report_{folder_name}.txt",
+        report_dir / f"weekly_report_{folder_name}.txt",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        f"No saved report found in {report_dir}. "
+        f"Tried: {', '.join(p.name for p in candidates)}"
+    )
+
+
+def _generate_images_stage(
+    config: dict,
+    summary: str,
+    folder_name: str,
+    report_dir: Path,
+) -> tuple[bool | str, list[tuple[str | None, object]]]:
+    """Run image generation. Returns (status, images).
+
+    `status` is True (ok), False (failed), or "skipped" (disabled).
+    `images` is a list of (public_url|None, local_path) tuples.
+    """
+    if not config.get("image_generation", {}).get("enabled", False):
+        return "skipped", []
+
+    print("\nGenerating images …")
+    try:
+        import generate_image as _gen_image
+        images = _gen_image.generate(config, summary, folder_name, report_dir)
+        return True, images
+    except Exception as exc:
+        print(f"  WARNING: Image generation failed — {exc}")
+        return False, []
+
+
+def _post_instagram_stage(
+    config: dict,
+    images: list[tuple[str | None, object]],
+    folder_name: str,
+    summary: str,
+) -> bool | str:
+    """Run Instagram posting. Returns True / False / 'skipped'."""
+    if not config.get("instagram", {}).get("enabled", False):
+        return "skipped"
+
+    image_urls = [url for url, _ in images if url]
+    if not image_urls:
+        print("\nInstagram posting skipped — no public image URLs available.")
+        return "skipped"
+
+    print(f"\nPosting {len(image_urls)} image(s) to Instagram …")
+    try:
+        import post_instagram as _post_ig
+        _post_ig.post(config, image_urls, folder_name, summary=summary)
+        return True
+    except Exception as exc:
+        print(f"  WARNING: Instagram posting failed — {exc}")
+        return False
+
+
+def publish_existing_report(config: dict, folder_name: str) -> dict:
+    """Generate images + post to Instagram for an already-saved report.
+
+    Skips NotebookLM (no Briefing Doc, no queries) and skips email entirely.
+    The report file at `{source_folder}/reports/{folder_name}/report_{folder_name}.txt`
+    must already exist (the legacy `weekly_report_*` name is also accepted).
+
+    Returns {"image": <status>, "instagram": <status>} so callers can roll
+    these into the pipeline summary the same way the full run does.
+    """
+    report_path = _find_existing_report(config, folder_name)
+    summary = report_path.read_text(encoding="utf-8")
+    print(f"Loaded report ({len(summary):,} chars): {report_path}")
+    validate_report(summary)
+    print(f"  ✓ Report looks good ({len(summary.strip())} chars).")
+
+    image_status, images = _generate_images_stage(
+        config, summary, folder_name, report_path.parent
+    )
+    instagram_status = _post_instagram_stage(config, images, folder_name, summary)
+    return {"image": image_status, "instagram": instagram_status}
 
 
 def run(
@@ -650,7 +743,12 @@ def run(
     send_email_flag: bool | None = None,
     generate_image_flag: bool | None = None,
     post_instagram_flag: bool | None = None,
-) -> None:
+) -> dict:
+    """Run the report stage. Returns a dict of per-substage results so the
+    pipeline summary can show email / image / instagram outcomes individually.
+
+    Keys: "email", "image", "instagram" — each value is True / False / "skipped".
+    """
     nlm_path        = config.get("nlm_path", "nlm")
     notebook_prefix = config.get("notebooklm_notebook_prefix", "Podcast Summary")
     date_range      = _format_date_range(folder_name)
@@ -687,40 +785,39 @@ def run(
     email_cfg = config.get("email", {})
     do_email = send_email_flag if send_email_flag is not None else email_cfg.get("enabled", True)
 
+    email_status: bool | str
     if do_email:
         print("\nSending email report …")
-        send_email(config, subject, plain_body, html_body)
+        try:
+            send_email(config, subject, plain_body, html_body)
+            email_status = True
+        except Exception as exc:
+            print(f"  WARNING: Email send failed — {exc}")
+            email_status = False
     else:
         print("\nEmail sending skipped (disabled in config or save-report-only mode).")
+        email_status = "skipped"
 
-    # Step 6: Generate images — one per report section (optional, non-fatal)
+    # Step 6: Generate images
     image_cfg = config.get("image_generation", {})
     do_image = generate_image_flag if generate_image_flag is not None else image_cfg.get("enabled", False)
-    images: list[tuple[str | None, object]] = []
-
     if do_image:
-        print("\nGenerating images …")
-        try:
-            import generate_image as _gen_image
-            images = _gen_image.generate(config, summary, folder_name, report_path.parent)
-        except Exception as exc:
-            print(f"  WARNING: Image generation failed — {exc}")
+        image_status, images = _generate_images_stage(
+            config, summary, folder_name, report_path.parent
+        )
+    else:
+        image_status, images = "skipped", []
 
-    # Step 7: Post to Instagram (optional, non-fatal)
+    # Step 7: Post to Instagram
     ig_cfg = config.get("instagram", {})
     do_instagram = post_instagram_flag if post_instagram_flag is not None else ig_cfg.get("enabled", False)
 
     if do_instagram:
-        image_urls = [url for url, _ in images if url]
-        if not image_urls:
-            print("\nInstagram posting skipped — no public image URLs available.")
-        else:
-            print(f"\nPosting {len(image_urls)} image(s) to Instagram …")
-            try:
-                import post_instagram as _post_ig
-                _post_ig.post(config, image_urls, folder_name, summary=summary)
-            except Exception as exc:
-                print(f"  WARNING: Instagram posting failed — {exc}")
+        instagram_status = _post_instagram_stage(config, images, folder_name, summary)
+    else:
+        instagram_status = "skipped"
+
+    return {"email": email_status, "image": image_status, "instagram": instagram_status}
 
 
 # ---------------------------------------------------------------------------

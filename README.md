@@ -253,6 +253,16 @@ psum run [CONFIG] --skip-instagram                    # skip Instagram posting
 psum run [CONFIG] --folder 20260218-20260225          # target a specific date range
 ```
 
+### Re-publishing an existing report
+
+Generate cards + post to Instagram from an already-saved report (skips fetch / transcribe / NotebookLM / email entirely). Useful for re-publishing after tweaking `prompts.image`, the mascot, or any other image-side config without burning another round of NotebookLM queries.
+
+```bash
+psum publish [CONFIG] --folder 20260428-20260429
+```
+
+Reads `{source_folder}/reports/{folder}/report_{folder}.txt`. The legacy `weekly_report_*.txt` filename is also accepted for older runs.
+
 ### Config management
 
 ```bash
@@ -282,19 +292,17 @@ psum cron status                          # show all installed psum jobs
 psum cron remove --name default           # remove a job by name
 ```
 
-### Feeds & recipients
+### Editing feeds, recipients, prompts, etc.
 
-Feeds and recipients are part of the config. Edit them via `psum init` (wizard) or `psum config set`:
+Everything is part of the config — there's no separate command to manage individual feeds or recipients. Edit them via `psum init` (interactive wizard) or `psum config set`:
 
 ```bash
-psum podcast list                          # list feeds in a config
-psum podcast add "My Show" <url>           # add a feed
-psum podcast remove "My Show"             # remove a feed
-
-psum receiver list                         # list email recipients
-psum receiver add colleague@example.com
-psum receiver remove colleague@example.com
+psum init                                              # walks through every section
+psum config set [CONFIG] lookback_days 3               # change one value
+psum config show [CONFIG]                              # see the whole file
 ```
+
+For multi-line values (e.g. tweaking `prompts.image` or the mascot description), open `~/.config/psum/<name>.yaml` directly in your editor.
 
 ---
 
@@ -337,7 +345,7 @@ psum cron status
       {podcast_name}_20260221.txt
   reports/
     20260221-20260228/
-      weekly_report_20260221-20260228.txt
+      report_20260221-20260228.txt
       card_1_episode_summaries.png     ← generated images (if enabled)
       card_2_key_themes_insights.png
   runs/
