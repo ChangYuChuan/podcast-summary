@@ -161,24 +161,81 @@ def _style_prefix(config: dict) -> str:
     )
 
 
-def _verify_url_content(url: str, expected_min_bytes: int = 1024) -> bool:
-    """Fetch `url` and verify it returns at least `expected_min_bytes` of data.
+# ---------------------------------------------------------------------------
+# Public image-hosting fallback chain
+# ---------------------------------------------------------------------------
+#
+# OpenAI's gpt-image-* family returns base64 only, but Instagram's Graph API
+# requires a publicly-fetchable HTTPS URL. We bridge that gap by uploading
+# the saved PNG to a free anonymous image host and using the returned URL.
+#
+# No single free host is reliable enough on its own:
+#   - catbox.moe occasionally responds 200 OK while storing a 0-byte file,
+#     and dedupes by content hash so retrying the same bytes returns the
+#     same broken URL
+#   - uguu.se uploads work but Instagram rejects URLs from this domain
+#   - 0x0.st is currently disabled by the operator (anti-abuse pause)
+#
+# The defence is a chain of hosts:
+#   1. each host gets a small number of attempts with exponential backoff
+#   2. every returned URL is verified with a GET that checks for non-empty
+#      content (catches catbox's silent 0-byte failures)
+#   3. on any failure we move on to the next host immediately
+#   4. when every host fails we return None so the caller can skip Instagram
+#      for that single image instead of erroring out the whole pipeline
+#
+# To add a new host: write `_upload_<name>(path) -> url` (raise on failure)
+# and append it to `_HOSTS`. Order = priority.
 
-    catbox.moe sometimes returns HTTP 200 with a URL but stores a 0-byte file
-    silently; Instagram then rejects the empty image with an "unknown error".
-    This guards against that whole class of failure.
-    """
+
+def _verify_url_content(url: str, expected_min_bytes: int = 1024) -> bool:
+    """Return True iff `url` resolves to image content of at least the given size."""
     try:
         r = requests.get(url, timeout=30)
         if not r.ok:
+            return False
+        ctype = r.headers.get("Content-Type", "").lower()
+        # Reject HTML viewer pages that some hosts (tmpfiles) serve at the
+        # canonical URL while keeping the actual binary at a `/dl/...` path.
+        if "image" not in ctype and len(r.content) < 4 * expected_min_bytes:
             return False
         return len(r.content) >= expected_min_bytes
     except Exception:
         return False
 
 
+def _upload_tmpfiles(image_path: Path) -> str | None:
+    """tmpfiles.org — anonymous, ~60 min retention, accepted by Instagram.
+
+    The viewer URL it returns serves an HTML page; the binary lives at
+    `/dl/<id>/<name>`. We rewrite to the /dl/ path before returning.
+    """
+    with open(image_path, "rb") as fh:
+        resp = requests.post(
+            "https://tmpfiles.org/api/v1/upload",
+            files={"file": (image_path.name, fh, "image/png")},
+            timeout=120,
+        )
+    if not resp.ok:
+        raise RuntimeError(f"status {resp.status_code}: {resp.text[:120]}")
+    data = resp.json()
+    if data.get("status") != "success":
+        raise RuntimeError(f"unexpected response: {resp.text[:200]}")
+    url = data["data"]["url"]
+    if url.startswith("http://"):
+        url = "https://" + url[len("http://"):]
+    # /<id>/<name>  →  /dl/<id>/<name>
+    url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1)
+    return url
+
+
 def _upload_catbox(image_path: Path) -> str | None:
-    """Upload to catbox.moe (no auth, persistent URLs)."""
+    """catbox.moe — anonymous, persistent URLs, accepted by Instagram.
+
+    Note: catbox dedupes by content hash, so if a previous identical
+    upload was stored as 0 bytes the next upload of the same content
+    returns that broken URL. The caller's verification step catches this.
+    """
     with open(image_path, "rb") as fh:
         resp = requests.post(
             "https://catbox.moe/user/api.php",
@@ -195,8 +252,12 @@ def _upload_catbox(image_path: Path) -> str | None:
 
 
 def _upload_uguu(image_path: Path) -> str | None:
-    """Fallback host. Files are temporary (~few hours) but plenty long enough
-    for Instagram to fetch them during media-container creation.
+    """uguu.se — anonymous, ~few hours retention.
+
+    Useful as a last-resort fallback. Note: at the time of writing
+    Instagram rejects image URLs hosted on uguu.se, so it's mainly
+    here so the saved-image path still has a public URL even when
+    the IG-accepted hosts are down.
     """
     with open(image_path, "rb") as fh:
         resp = requests.post(
@@ -213,23 +274,25 @@ def _upload_uguu(image_path: Path) -> str | None:
     return files[0]["url"]
 
 
-_HOSTS: list[tuple[str, callable]] = [  # type: ignore[type-arg]
+# Host priority — most IG-friendly first, then persistent-URL options,
+# then last-resort. Each tuple: (display name, uploader callable).
+_HOSTS: list[tuple[str, "callable"]] = [
+    ("tmpfiles.org", _upload_tmpfiles),
     ("catbox.moe", _upload_catbox),
     ("uguu.se", _upload_uguu),
 ]
 
 
 def _upload_to_public_host(image_path: Path, attempts_per_host: int = 2) -> str | None:
-    """Upload an image to a public host and return a verified URL.
+    """Upload to a public host and return a verified, IG-compatible URL.
 
-    Bridges base64-only models (gpt-image-1, gpt-image-2) to Instagram's
-    Graph API, which requires a publicly-fetchable image URL — it cannot
-    accept binary or base64 data directly.
+    Walks the host chain in `_HOSTS` order. For each host:
+      - try up to `attempts_per_host` times with exponential backoff
+      - verify the returned URL serves real image content (>= 1 KiB)
+      - on any failure, move to the next host
 
-    Tries each host in order and verifies each returned URL by re-fetching
-    it; some hosts (catbox.moe in particular) intermittently respond 200 OK
-    with a URL while silently storing a 0-byte file. Returns None when all
-    hosts fail so the caller can skip Instagram for that single image.
+    Returns None when every host fails so the caller skips Instagram
+    for this image rather than aborting the rest of the carousel.
     """
     import time
     last_err = ""
@@ -242,15 +305,18 @@ def _upload_to_public_host(image_path: Path, attempts_per_host: int = 2) -> str 
             else:
                 if url and _verify_url_content(url):
                     return url
-                last_err = f"{host_name}: returned URL but content is empty/unreadable ({url})"
+                last_err = f"{host_name}: URL returned but content is empty / unreadable ({url})"
 
             if attempt < attempts_per_host:
                 backoff = 2 * attempt
-                print(f"    {host_name} attempt {attempt}/{attempts_per_host} failed ({last_err}) — retrying in {backoff}s")
+                print(
+                    f"    {host_name} attempt {attempt}/{attempts_per_host} failed "
+                    f"({last_err}) — retrying in {backoff}s"
+                )
                 time.sleep(backoff)
-        print(f"    {host_name} unavailable — trying next host")
+        print(f"    {host_name} unavailable — falling through")
 
-    print(f"    WARNING: all hosts failed for {image_path.name}: {last_err}")
+    print(f"    WARNING: all image hosts failed for {image_path.name}: {last_err}")
     return None
 
 
