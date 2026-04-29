@@ -160,6 +160,97 @@ def _is_chinese(lang: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Stocks mode — one section per individual stock discovered in the sources.
+# Activated by `report_mode: stocks` in the config.
+# ---------------------------------------------------------------------------
+
+# Phrasing to keep every prompt source-neutral. The generated post must not
+# tell readers where the analysis came from.
+_STOCKS_NEUTRAL_NOTE = (
+    "請務必保持來源中性："
+    "不要提及任何 podcast、YouTube 頻道、節目名稱、集數編號、主持人或來賓的名字。"
+    "請使用「資料來源」、「本期內容」這類中性詞彙，"
+    "也不要寫「在 XX 節目中提到」這種句式。"
+)
+
+_STOCK_DISCOVERY_PROMPT_ZH = (
+    "請列出資料來源中所有被討論到的個股、ETF 或公司，"
+    "範圍包含台股、美股、港股，以及指數型 / 主題型 ETF。\n"
+    "格式要求："
+    "  (1) 每一檔獨立成行，使用「1. Intel (INTC)」、「2. 台積電 (2330)」這種編號 + 中文 / 英文名稱 + 括號內代號的格式；"
+    "  (2) 同一檔股票只列一次，依資料中討論的份量由多到少排序；"
+    "  (3) 只列出實際被分析或評論的標的，不要憑空產生；"
+    "  (4) 至多列出 12 檔。\n"
+    f"{_STOCKS_NEUTRAL_NOTE}\n"
+    "請使用繁體中文回答。回答中只需列出個股清單，不要附加說明文字。"
+)
+
+_STOCK_DETAIL_PROMPT_ZH_TEMPLATE = (
+    "請針對「{stock}」這一檔股票，根據資料來源中所有相關的討論，整理出一份深入的個股分析。\n"
+    "請涵蓋以下五個面向，每一項使用獨立的項目符號（• 開頭），且每一個重點都必須是完整、自包含的句子：\n"
+    "  • 整體看法：「看多 / 看空 / 中性 / 觀察」擇一，並用一句話說明定調。\n"
+    "  • 核心理由：3–5 點，可分基本面 / 技術面 / 籌碼面 / 產業趨勢，每一點需有清楚的因果或數據支撐。\n"
+    "  • 主要風險或不確定性：1–3 點。\n"
+    "  • 重要催化劑或近期數據：1–3 點（財報、新品、訂單、政策、法人動向…）。\n"
+    "  • 關鍵價位或目標價：若資料來源中有提到，請列出具體價位；若無，請寫「資料來源未提供具體價位」。\n"
+    f"{_STOCKS_NEUTRAL_NOTE}\n"
+    "請以直接陳述事實的方式撰寫，不要使用「主持人認為」、「節目中提到」、「他們建議」這類轉述語句。"
+    "答覆中不要保留 [1]、[1-3] 這類引用標記，也不要在重點中以「主因在於...」或「主要原因是...」這類沒有結尾的片段結束。"
+    "請使用繁體中文回答。"
+)
+
+# Numbered-list parser for the discovery query. Accepts:
+#   1. Intel (INTC)
+#   2、 台積電 (2330)
+#   3) NVIDIA
+_STOCK_LINE_PATTERN = re.compile(r"^\s*\d+\s*[.、)）]\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _discover_stocks(nlm_path: str, notebook_id: str) -> list[str]:
+    """Run the stock-discovery query and return a deduped list of stock names."""
+    raw = query_notebook(nlm_path, notebook_id, _STOCK_DISCOVERY_PROMPT_ZH)
+    candidates = [m.group(1).strip() for m in _STOCK_LINE_PATTERN.finditer(raw)]
+    seen, ordered = set(), []
+    for c in candidates:
+        # Strip trailing markdown emphasis
+        c = re.sub(r"^\*+|\*+$", "", c).strip()
+        key = c.lower()
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(c)
+    return ordered
+
+
+def query_per_stock_sections(nlm_path: str, notebook_id: str, config: dict) -> str:
+    """Stocks-mode report: one ## section per discovered stock.
+
+    Caps the number of stocks at `image_generation.max_images` (default 10)
+    so the resulting image set stays within Instagram's carousel limit.
+    """
+    print("  Discovering stocks discussed this period …")
+    stocks = _discover_stocks(nlm_path, notebook_id)
+    cap = int(config.get("image_generation", {}).get("max_images", 10))
+    stocks = stocks[:cap]
+    if not stocks:
+        print("  No stocks discovered. Falling back to a single placeholder section.")
+        return "## 本期股市觀察\n\n資料來源中未明確討論到具體個股，請開啟 NotebookLM 筆記本檢視內容。"
+
+    print(f"  → {len(stocks)} stock(s): {', '.join(stocks)}")
+    parts: list[str] = []
+    for idx, stock in enumerate(stocks, start=1):
+        print(f"  [{idx}/{len(stocks)}] Querying: {stock} …")
+        prompt = _STOCK_DETAIL_PROMPT_ZH_TEMPLATE.format(stock=stock)
+        try:
+            answer = query_notebook(nlm_path, notebook_id, prompt)
+        except RuntimeError as exc:
+            print(f"    WARNING: query failed — {exc}")
+            answer = "(此檔個股查詢失敗，請改開啟 NotebookLM 筆記本檢視。)"
+        parts.append(f"## {stock}\n\n{answer}")
+        print(f"    → {len(answer):,} chars")
+    return "\n\n---\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -284,8 +375,17 @@ def query_notebook(
 
 
 def query_all_sections(nlm_path: str, notebook_id: str, config: dict | None = None) -> str:
-    """Run each report section query independently and combine into one document."""
-    sections = _get_report_sections(config or {})
+    """Run each report section query independently and combine into one document.
+
+    When `report_mode: stocks` is set in config, switches to per-stock sections:
+    a single discovery query enumerates the stocks discussed, then each stock
+    gets its own focused ## section. Otherwise behaves identically to before.
+    """
+    cfg = config or {}
+    if cfg.get("report_mode") == "stocks":
+        return query_per_stock_sections(nlm_path, notebook_id, cfg)
+
+    sections = _get_report_sections(cfg)
     parts = []
     for idx, (title, question) in enumerate(sections, start=1):
         print(f"  [{idx}/{len(sections)}] Querying: {title} …")

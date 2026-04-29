@@ -130,7 +130,22 @@ instagram:
   # access_token: ""          # prefer INSTAGRAM_ACCESS_TOKEN env var
 
 # ---------------------------------------------------------------------------
-# Custom report sections (optional)
+# Report mode (optional, default: "sections")
+#   sections — fixed sections (Episode Summaries / Themes / Stocks / Takeaways).
+#              Each section becomes one image in the Instagram carousel.
+#   stocks   — discovers every individual stock discussed and produces ONE
+#              section per stock with focused content (view, reasons, risks,
+#              catalysts, target). Each stock becomes one image in the
+#              carousel — capped at image_generation.max_images (Instagram's
+#              carousel limit is 10).
+#
+# All built-in prompts are source-neutral: the generated post never names
+# the underlying podcasts, YouTube channels, or hosts.
+# ---------------------------------------------------------------------------
+report_mode: stocks
+
+# ---------------------------------------------------------------------------
+# Custom report sections (optional, ignored when report_mode: stocks)
 # Each section is queried independently against the NotebookLM notebook.
 # If omitted, a built-in 4-section template is used: Chinese when
 # whisper_language is "zh", otherwise English. Both built-in templates

@@ -171,11 +171,38 @@ def _trim_caption(text: str) -> str:
     return text[: MAX_CAPTION_CHARS - 1].rstrip() + "…"
 
 
+def _stock_oneliner(body: str) -> str:
+    """Pull a single descriptive line out of a per-stock section body.
+
+    Looks for the "整體看法" / "看法" line first (which the prompt asks for
+    explicitly) and falls back to the first usable bullet otherwise. Trims
+    to ~90 chars so the caption stays readable when many stocks are listed.
+    """
+    bullets = _bullets(body, max_items=8)
+    if not bullets:
+        return ""
+    # Prefer the line that describes the stance
+    for b in bullets:
+        if b.startswith(("整體看法", "看法", "Overall view", "View")):
+            text = b.split("：", 1)[-1].split(":", 1)[-1].strip() or b
+            return text[:90]
+    text = bullets[0]
+    return text[:90]
+
+
+def _stocks_mode_blocks(summary: str | None) -> list[tuple[str, str]]:
+    """In stocks mode, every section is one stock — title is the stock name."""
+    if not summary:
+        return []
+    return _section_blocks(summary)
+
+
 def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
     ig_cfg = config.get("instagram", {})
     report_title = config.get("report_title", "Podcast Digest")
     date_range = _format_date_range(folder_name)
     chinese = _is_chinese(config)
+    stocks_mode = config.get("report_mode") == "stocks"
 
     template = ig_cfg.get("caption_template")
     if template:
@@ -183,6 +210,31 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
             template.format(report_title=report_title, date_range=date_range)
         )
 
+    # ── Stocks mode: caption is a roll-call of the stocks covered ───────────
+    if stocks_mode:
+        blocks = _stocks_mode_blocks(summary)
+        if chinese:
+            parts = [f"🎙《{report_title}》", f"📅 {date_range}", ""]
+            if blocks:
+                parts.append("📈 本期重點個股")
+                for stock_name, body in blocks:
+                    one = _stock_oneliner(body)
+                    parts.append(f"• {stock_name} — {one}" if one else f"• {stock_name}")
+                parts.append("")
+            parts.append("#股市 #投資 #台股 #美股 #個股分析 #財經")
+            return _trim_caption("\n".join(parts).rstrip())
+
+        parts = [f"🎙 {report_title}", f"📅 {date_range}", ""]
+        if blocks:
+            parts.append("Stocks covered")
+            for stock_name, body in blocks:
+                one = _stock_oneliner(body)
+                parts.append(f"• {stock_name} — {one}" if one else f"• {stock_name}")
+            parts.append("")
+        parts.append("#stocks #investing #digest #markets")
+        return _trim_caption("\n".join(parts).rstrip())
+
+    # ── Sections mode (default, unchanged) ─────────────────────────────────
     stocks = _stocks_lines(summary) if summary else []
     highlights = _highlight_lines(summary) if summary else []
 
@@ -200,7 +252,7 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
             parts.append("📈 本期提到的個股")
             parts.extend(f"• {s}" for s in stocks)
             parts.append("")
-        parts.append("#股市 #投資 #台股 #美股 #podcast #財經")
+        parts.append("#股市 #投資 #台股 #美股 #財經")
         return _trim_caption("\n".join(parts).rstrip())
 
     parts = [
@@ -216,7 +268,7 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
         parts.append("Stocks mentioned")
         parts.extend(f"• {s}" for s in stocks)
         parts.append("")
-    parts.append("#podcast #digest #investing #stocks")
+    parts.append("#digest #investing #stocks")
     return _trim_caption("\n".join(parts).rstrip())
 
 
