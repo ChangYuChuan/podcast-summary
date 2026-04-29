@@ -140,25 +140,47 @@ def _style_prefix(config: dict) -> str:
     if image_cfg.get("style", "infographic") == "illustration":
         if chinese:
             return (
-                "編輯雜誌風格插畫。色彩鮮豔飽滿，強烈的概念意象，焦點集中。"
+                "可愛、柔和的編輯插畫風格。色調以淡藍 / 粉藍 / 天空藍為主，"
+                "搭配一點奶油白與淺灰，整體感覺乾淨、療癒、討喜。"
+                "意象明確、焦點集中，不要使用過於飽和或刺眼的顏色。"
                 "整張圖不要出現任何文字或字符。"
             )
         return (
-            "Editorial magazine illustration. Vibrant saturated colours, bold conceptual "
-            "imagery, strong focal point. No text or words anywhere."
+            "Cute, soft editorial illustration. Pastel sky-blue / baby-blue / cream "
+            "palette, gentle and friendly, clean focal point. No harsh saturation, "
+            "no text anywhere."
         )
     if chinese:
         return (
-            "簡潔的 Instagram 資訊卡片，方形 1:1 構圖。"
-            "白色或淺米色背景，搭配一個重點色（深藍或紅色）。"
-            "邊距留白寬鬆，所有文字皆使用清晰、易讀的繁體中文無襯線字型（例如思源黑體 / Noto Sans TC）。"
+            "簡潔可愛的 Instagram 資訊卡片，方形 1:1 構圖。"
+            "背景使用淡藍色（如 #DCEEFB / #BFE0F8 / 天空藍）或奶油白漸層，"
+            "搭配深藍色（#1F4F7A）的標題與內文，"
+            "重點處可以用一點粉藍或薄荷綠點綴，整體風格乾淨、可愛、討喜。"
+            "邊距留白寬鬆，使用清晰、現代的繁體中文無襯線字型（例如思源黑體 / Noto Sans TC）。"
             "嚴禁出現任何簡體中文字，所有字皆需為繁體中文。"
+            "嚴禁使用紅色 / 黃色 / 黑底等對比過強的配色。"
         )
     return (
-        "Clean Instagram infographic card. Minimal background (white or light cream), "
-        "one accent colour, generous padding, bold readable sans-serif typography, "
-        "square (1:1) format."
+        "Cute, clean Instagram infographic card, square 1:1. "
+        "Soft light-blue background (#DCEEFB / #BFE0F8 / sky-blue) or cream gradient, "
+        "deep-blue (#1F4F7A) title and body text, optional mint or pastel-blue accents. "
+        "Generous padding, modern friendly sans-serif typography, no harsh contrast."
     )
+
+
+def _signature_text(config: dict) -> str:
+    """Return the signature line to render at the bottom of every card, or ''."""
+    image_cfg = config.get("image_generation", {})
+    sig = image_cfg.get("signature")
+    if sig:
+        return str(sig).strip()
+    # Auto-derive from Instagram config when posting is enabled
+    ig_cfg = config.get("instagram", {})
+    if ig_cfg.get("enabled"):
+        handle = ig_cfg.get("handle")
+        if handle:
+            return f"ig:{str(handle).lstrip('@').strip()}"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -350,40 +372,63 @@ def _build_section_prompt(
         )
 
     chinese = _is_chinese(config)
+    signature = _signature_text(config)
 
     if style == "illustration":
         if chinese:
+            sig_zh = (
+                f"在卡片右下角放一個小小的、低調的浮水印簽名「{signature}」，"
+                "字體比主視覺小很多，顏色為半透明的中性灰，不要喧賓奪主。"
+                if signature else ""
+            )
             return (
                 f"{'（' + card_label + '）' if card_label else ''}"
                 f"為《{report_title}》（{date_range}）的「{title}」段落設計一張 Instagram 插畫。"
-                f"{prefix} 主題內容：{themes}"
+                f"{prefix} 主題內容：{themes} {sig_zh}"
             )
+        sig_en = (
+            f" Place a small, subtle watermark signature '{signature}' in the "
+            "bottom-right corner — much smaller than the main art, semi-transparent grey."
+            if signature else ""
+        )
         return (
             f"{'(' + card_label + ') ' if card_label else ''}"
             f"Instagram illustration for '{report_title}' ({date_range}), "
-            f"section '{title}'. {prefix} Themes: {themes}"
+            f"section '{title}'. {prefix} Themes: {themes}{sig_en}"
         )
 
     # Default: infographic summary card
     if chinese:
         zh_label = f"（{card_label}）" if card_label else ""
+        sig_zh = (
+            f"\n在卡片底部放一個小巧、低調的簽名「{signature}」，"
+            "字體比內文小，置中或靠右對齊，使用淡藍色或柔和的灰色，"
+            "不要搶主視覺的焦點。"
+            if signature else ""
+        )
         return (
             f"請為《{report_title}》（{date_range}）設計一張 Instagram 資訊卡片。\n"
             f"{zh_label}段落主題：{title}\n\n"
             f"請完整且清楚地呈現以下重點作為卡片主要內容（請逐條列出，全部使用繁體中文）：\n{highlights}\n\n"
             f"視覺風格：{prefix}\n"
             "排版：段落標題以粗體放在卡片頂部，每一個重點獨立成一行，"
-            "字體在手機上要清晰易讀；不要使用裝飾性元素干擾文字閱讀，留白要充足。\n"
+            "字體在手機上要清晰易讀；不要使用裝飾性元素干擾文字閱讀，留白要充足。"
+            f"{sig_zh}\n"
             "重要：所有文字必須是正確的繁體中文（不可出現簡體字、亂碼、英文亂譯）。"
         )
 
+    sig_en = (
+        f"\nFooter: place a small, subtle signature '{signature}' at the very bottom "
+        "of the card — small font, soft blue or muted grey, centred or right-aligned."
+        if signature else ""
+    )
     return (
         f"Design an Instagram summary card for '{report_title}' ({date_range}).\n"
         f"{'(' + card_label + ') ' if card_label else ''}Section: {title}\n\n"
         f"Display exactly these points as the main content:\n{highlights}\n\n"
         f"Visual style: {prefix}\n"
         "Layout: bold section title at top, each point on its own line, "
-        "readable at mobile size. No decorative clutter — let the text breathe."
+        f"readable at mobile size. No decorative clutter — let the text breathe.{sig_en}"
     )
 
 
