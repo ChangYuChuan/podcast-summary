@@ -73,8 +73,37 @@ def _section_blocks(summary: str) -> list[tuple[str, str]]:
     return blocks
 
 
+# Safety filters for caption bullets — even with prompt-level scoping, the
+# model occasionally slips through reported-speech phrasing or off-topic bullets.
+_REPORTED_SPEECH = re.compile(
+    r"主持人(認為|提到|表示|覺得|建議|指出)|"
+    r"節目中(提到|表示|指出)|"
+    r"他們(認為|表示|覺得)|"
+    r"分析師(覺得|認為)"
+)
+_OFF_TOPIC_HINTS = re.compile(
+    r"(日常生活|生活雜談|美食|旅遊|3C 開箱|AI 工具教學|運動|娛樂|八卦)"
+)
+
+
+def _strip_reported_speech(text: str) -> str:
+    """Drop common '主持人 認為 / 節目中 提到' wrapper from the start of a bullet."""
+    return re.sub(
+        r"^(主持人(認為|提到|表示|覺得|建議|指出)|"
+        r"節目中(提到|表示|指出)|"
+        r"他們(認為|表示|覺得)|"
+        r"分析師(覺得|認為))[，：、]?\s*",
+        "",
+        text,
+    )
+
+
 def _bullets(body: str, max_items: int) -> list[str]:
-    """Pull up to max_items bullet-style lines from a section body, cleaned."""
+    """Pull up to max_items bullet-style lines from a section body, cleaned.
+
+    Skips lines that look like off-topic (daily-life / entertainment) noise
+    and trims away reported-speech wrappers like '主持人認為...'.
+    """
     items: list[str] = []
     for line in body.splitlines():
         line = line.strip()
@@ -83,6 +112,9 @@ def _bullets(body: str, max_items: int) -> list[str]:
             continue
         text = re.sub(r"\*\*(.+?)\*\*", r"\1", m.group(1)).strip()
         text = re.sub(r"\s+", " ", text)
+        if _OFF_TOPIC_HINTS.search(text):
+            continue
+        text = _strip_reported_speech(text)
         if len(text) > 110:
             text = text[:107] + "…"
         if text:
@@ -159,9 +191,8 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
             parts.append("📈 本期提到的個股")
             parts.extend(f"• {s}" for s in stocks)
             parts.append("")
-        parts.append("完整內容詳見每日電子報。")
         parts.append("#股市 #投資 #台股 #美股 #podcast #財經")
-        return _trim_caption("\n".join(parts))
+        return _trim_caption("\n".join(parts).rstrip())
 
     parts = [
         f"🎙 {report_title}",
@@ -176,9 +207,8 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
         parts.append("Stocks mentioned")
         parts.extend(f"• {s}" for s in stocks)
         parts.append("")
-    parts.append("Full digest delivered to subscribers.")
     parts.append("#podcast #digest #investing #stocks")
-    return _trim_caption("\n".join(parts))
+    return _trim_caption("\n".join(parts).rstrip())
 
 
 def _check_response(resp: requests.Response, action: str) -> None:
