@@ -6,12 +6,10 @@ psum — Podcast Summary CLI.
 
 Usage:
   psum --help
-  psum init                          # Interactive setup wizard
+  psum init                          # Interactive setup wizard (feeds, receivers, days, etc.)
   psum run [options]                 # Run the pipeline
-  psum podcast list/add/remove       # Manage podcast feeds
-  psum receiver list/add/remove      # Manage email recipients
   psum cron install/remove/status    # Manage cron jobs
-  psum config show/set               # View/update config values
+  psum config show/set/create/list   # View/update config values
   psum mcp                           # Start the MCP server
 """
 
@@ -172,6 +170,7 @@ def main(ctx, config):
 
 WIZARD_SECTIONS = [
     ("paths",     "Project & data paths"),
+    ("days",      "Lookback window"),
     ("feeds",     "Podcast feeds"),
     ("nlm",       "NotebookLM"),
     ("email",     "Email & SMTP"),
@@ -201,6 +200,7 @@ def _section_summary(cfg: dict) -> dict[str, str]:
     to_str = ", ".join(to) if isinstance(to, list) else to
     return {
         "paths":     cfg.get("project_root", "") or "(not set)",
+        "days":      f"{cfg.get('lookback_days', 7)} day(s)",
         "feeds":     f"{len(feeds)} feed(s)" if feeds else "(none)",
         "nlm":       cfg.get("nlm_path", "") or "(not set)",
         "email":     f"{cfg.get('email',{}).get('from','')} → {to_str}" if to_str else "(not set)",
@@ -269,6 +269,16 @@ def _run_config_wizard(config_path: Path, sections: Optional[set[str]] = None) -
 
         cfg["project_root"] = str(project_root_path)
         cfg["source_folder"] = source_folder
+
+    # ── days ───────────────────────────────────────────────────────────────────
+    if "days" in active:
+        click.echo("\n--- Lookback Window ---")
+        current_days = cfg.get("lookback_days", 7)
+        cfg["lookback_days"] = click.prompt(
+            "How many days back to fetch episodes",
+            default=current_days,
+            type=int,
+        )
 
     # ── feeds ──────────────────────────────────────────────────────────────────
     if "feeds" in active:
@@ -447,7 +457,7 @@ def _run_config_wizard(config_path: Path, sections: Optional[set[str]] = None) -
 
     # ── defaults & save ────────────────────────────────────────────────────────
     cfg.setdefault("feeds", [])
-    cfg.setdefault("lookback_days", 7)
+    cfg.setdefault("lookback_days", 7)  # kept as fallback for configs skipping the days step
     cfg.setdefault("whisper_model", "medium")
     cfg.setdefault("whisper_language", "en")
     cfg.setdefault("notebooklm_notebook_prefix", "Podcast Summary")
@@ -577,126 +587,6 @@ def run_cmd(ctx, skip_fetch, skip_transcribe, skip_report, skip_cleanup,
 
     result = subprocess.run(cmd, cwd=str(project_root))
     sys.exit(result.returncode)
-
-
-# ─── podcast ──────────────────────────────────────────────────────────────────
-
-@main.group()
-def podcast():
-    """Manage podcast feeds."""
-    pass
-
-
-@podcast.command("list")
-@click.pass_context
-def podcast_list(ctx):
-    """Print all configured podcast feeds."""
-    cfg = _load_cfg(ctx.obj["config"])
-    feeds = cfg.get("feeds", [])
-    if not feeds:
-        click.echo("No feeds configured.")
-        return
-    for i, feed in enumerate(feeds, 1):
-        click.echo(f"  {i}. {feed['name']}")
-        click.echo(f"     {feed['url']}")
-
-
-@podcast.command("add")
-@click.argument("name")
-@click.argument("url")
-@click.pass_context
-def podcast_add(ctx, name, url):
-    """Add a podcast feed."""
-    config_path = ctx.obj["config"]
-    cfg = _load_cfg(config_path)
-    feeds = cfg.setdefault("feeds", [])
-    for feed in feeds:
-        if feed["name"] == name:
-            click.echo(f"Feed '{name}' already exists.")
-            return
-    feeds.append({"name": name, "url": url})
-    _save_cfg(config_path, cfg)
-    click.echo(f"Added: {name}")
-
-
-@podcast.command("remove")
-@click.argument("name")
-@click.pass_context
-def podcast_remove(ctx, name):
-    """Remove a podcast feed by name."""
-    config_path = ctx.obj["config"]
-    cfg = _load_cfg(config_path)
-    feeds = cfg.get("feeds", [])
-    new_feeds = [f for f in feeds if f["name"] != name]
-    if len(new_feeds) == len(feeds):
-        click.echo(f"Feed '{name}' not found.")
-        return
-    cfg["feeds"] = new_feeds
-    _save_cfg(config_path, cfg)
-    click.echo(f"Removed: {name}")
-
-
-# ─── receiver ─────────────────────────────────────────────────────────────────
-
-@main.group()
-def receiver():
-    """Manage email recipients."""
-    pass
-
-
-@receiver.command("list")
-@click.pass_context
-def receiver_list(ctx):
-    """Print all configured email recipients."""
-    cfg = _load_cfg(_pick_config(ctx.obj["config"]))
-    to = cfg.get("email", {}).get("to", "")
-    if not to:
-        click.echo("No recipients configured.")
-        return
-    recipients = to if isinstance(to, list) else [to]
-    for i, email in enumerate(recipients, 1):
-        click.echo(f"  {i}. {email}")
-
-
-@receiver.command("add")
-@click.argument("email_addr")
-@click.pass_context
-def receiver_add(ctx, email_addr):
-    """Add an email recipient."""
-    config_path = _pick_config(ctx.obj["config"])
-    cfg = _load_cfg(config_path)
-    email_cfg = cfg.setdefault("email", {})
-    to = email_cfg.get("to", "")
-    recipients = to if isinstance(to, list) else ([to] if to else [])
-    if email_addr in recipients:
-        click.echo(f"'{email_addr}' is already in the recipient list.")
-        return
-    recipients.append(email_addr)
-    email_cfg["to"] = recipients if len(recipients) > 1 else recipients[0]
-    _save_cfg(config_path, cfg)
-    click.echo(f"Added: {email_addr}")
-
-
-@receiver.command("remove")
-@click.argument("email_addr")
-@click.pass_context
-def receiver_remove(ctx, email_addr):
-    """Remove an email recipient."""
-    config_path = _pick_config(ctx.obj["config"])
-    cfg = _load_cfg(config_path)
-    email_cfg = cfg.setdefault("email", {})
-    to = email_cfg.get("to", "")
-    recipients = to if isinstance(to, list) else ([to] if to else [])
-    new_recipients = [r for r in recipients if r != email_addr]
-    if len(new_recipients) == len(recipients):
-        click.echo(f"'{email_addr}' not found in recipient list.")
-        return
-    email_cfg["to"] = (
-        new_recipients if len(new_recipients) > 1 else
-        (new_recipients[0] if new_recipients else "")
-    )
-    _save_cfg(config_path, cfg)
-    click.echo(f"Removed: {email_addr}")
 
 
 # ─── cron ─────────────────────────────────────────────────────────────────────

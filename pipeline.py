@@ -222,15 +222,7 @@ def _cleanup_data_dir(data_root: Path, label: str,
     for week_dir in sorted(data_root.iterdir()):
         if not week_dir.is_dir():
             continue
-        parts = week_dir.name.split("-")
-        if len(parts) != 2 or len(parts[0]) != 8:
-            print(f"  Skipping unrecognised folder: {week_dir.name}")
-            continue
-        try:
-            folder_date = datetime.strptime(parts[0], "%Y%m%d").date()
-        except ValueError:
-            print(f"  Skipping unrecognised folder: {week_dir.name}")
-            continue
+        folder_date = datetime.fromtimestamp(week_dir.stat().st_mtime, tz=timezone.utc).date()
 
         if folder_date < cutoff:
             files = []
@@ -267,7 +259,7 @@ def _cleanup_by_speaker(data_root: Path, label: str,
         return
 
     cutoff = _cutoff_date(months)
-    print(f"  Cutoff date : {cutoff}  (deleting files published before this date)")
+    print(f"  Cutoff date : {cutoff}  (deleting files last modified before this date)")
 
     removed = 0
     for speaker_dir in sorted(data_root.iterdir()):
@@ -275,11 +267,7 @@ def _cleanup_by_speaker(data_root: Path, label: str,
             continue
         for ext in extensions:
             for f in speaker_dir.glob(f"*{ext}"):
-                date_str = f.stem.split("_")[-1]
-                try:
-                    file_date = datetime.strptime(date_str, "%Y%m%d").date()
-                except ValueError:
-                    continue
+                file_date = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).date()
                 if file_date < cutoff:
                     size_mb = f.stat().st_size / (1024 * 1024)
                     print(f"  Deleting ({size_mb:.2f} MB): {speaker_dir.name}/{f.name}")
