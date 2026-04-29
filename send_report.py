@@ -88,9 +88,9 @@ REPORT_SECTIONS = [
 # whisper_language is "zh" / "zh-TW" / "zh-Hant" and no custom
 # report_sections are provided in config.
 _ZH_SCOPE = (
-    "範圍限定：只包含與股市、個股、產業、總體經濟、央行 / 利率政策、外匯、商品、"
+    "範圍限定：只包含與科技、AI、股市、個股、產業、總體經濟、央行 / 利率政策、外匯、商品、"
     "投資策略相關的內容。請忽略並排除任何與此無關的話題，例如：日常生活、娛樂、"
-    "旅遊、美食、運動、人物八卦、AI 工具教學、3C 開箱、生活雜談等。"
+    "旅遊、美食、運動、人物八卦、3C 開箱、生活雜談等。"
 )
 
 _ZH_VOICE = (
