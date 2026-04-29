@@ -63,10 +63,10 @@ whisper_model: medium
 whisper_language: zh
 
 # Title used in the email header, image prompts, and Instagram caption.
-report_title: 股市週報
+report_title: 股市日報
 
 # Prefix used when creating the NotebookLM notebook (date range is appended).
-notebooklm_notebook_prefix: 股市週報
+notebooklm_notebook_prefix: 股市日報
 
 # Path to the nlm binary (autodetected from the psum venv if unset).
 # nlm_path: /Users/you/.config/psum/venv/bin/nlm

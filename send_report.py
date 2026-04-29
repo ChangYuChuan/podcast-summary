@@ -23,6 +23,7 @@ Usage (standalone):
 import argparse
 import json
 import os
+import re
 import smtplib
 import subprocess
 import sys
@@ -94,18 +95,26 @@ _ZH_SCOPE = (
 )
 
 _ZH_VOICE = (
-    "請以直接陳述事實的方式撰寫，例如「Intel 的 IDM 2.0 策略已被驗證」，"
+    "請以直接陳述事實的方式撰寫，例如「Intel 的 IDM 2.0 策略已被驗證，"
+    "並且受惠於 Agentic AI 帶動的 CPU 需求」，"
     "不要使用「主持人」、「節目中提到」、「他們認為」、「分析師覺得」這類轉述語句。"
+)
+
+_ZH_COMPLETE = (
+    "請以完整、自包含的句子作答，不要在句中或論點中途斷掉。"
+    "每一個重點都應該有清楚的主詞、動詞、結論或結果（例如「主因在於 X，因此 Y」），"
+    "不可以只寫「主因在於...」或「主要原因是...」這類沒有結尾的片段。"
+    "答覆中不要保留 [1]、[1-3]、[1, 2] 這類引用標記。"
 )
 
 REPORT_SECTIONS_ZH = [
     (
-        "本期節目摘要",
+        "昨日股市摘要",
         (
-            "請針對本期的每一集節目，提供與投資 / 財經主題相關的詳細摘要。"
+            "請針對昨日的每一集節目，提供與投資 / 財經主題相關的詳細摘要。"
             f"{_ZH_SCOPE} "
             "每一集請包含：主要主題、核心論點、重要事實或數據、以及結論。"
-            f"{_ZH_VOICE} "
+            f"{_ZH_VOICE} {_ZH_COMPLETE} "
             "請標明每一集的節目名稱與發佈日期。如果某一集完全沒有相關內容，"
             "請直接寫「本集無相關內容」。請使用繁體中文回答。"
         ),
@@ -113,33 +122,34 @@ REPORT_SECTIONS_ZH = [
     (
         "重點主題與洞察",
         (
-            "請辨識並分析本期所有節目中浮現的主要市場主題、產業趨勢與投資洞察。"
+            "請辨識並分析昨日所有節目中浮現的主要市場主題、產業趨勢與投資洞察。"
             f"{_ZH_SCOPE} "
             "若不同節目之間有共識或分歧，請特別標註，並說明每個主題對投資人的意義。"
-            f"{_ZH_VOICE} 請使用繁體中文回答。"
+            f"{_ZH_VOICE} {_ZH_COMPLETE} 請使用繁體中文回答。"
         ),
     ),
     (
-        "本期提到的個股",
+        "昨日提到的個股",
         (
-            "請列出本期所有節目中被提到的每一檔個股、ETF 或公司。"
+            "請列出昨日所有節目中被提到的每一檔個股、ETF 或公司。"
             "針對每一檔，請包含：股票代號 / 中文名稱、看法（看多 / 看空 / 中性 / 觀察）、"
             "核心理由（基本面 / 技術面 / 籌碼面）、以及來自哪一集節目。"
             "請將看多、看空、觀察名單分組呈現。"
             "只列出節目實際討論過的標的，不要憑空產生。"
-            f"{_ZH_VOICE} "
-            "例如直接寫「核心理由：IDM 2.0 策略被驗證、A16 製程進度順利」，"
-            "而不是「主持人認為 IDM 2.0...」。請使用繁體中文回答。"
+            f"{_ZH_VOICE} {_ZH_COMPLETE} "
+            "例如完整寫「核心理由：IDM 2.0 策略已被驗證可行，且 A16 製程進度順利、獲特斯拉採用，"
+            "因此產能利用率與毛利率有望同步提升」，而不是「主因在於 IDM 2.0...」這類斷句。"
+            "請使用繁體中文回答。"
         ),
     ),
     (
         "重點結論與行動建議",
         (
-            "請整理本期所有節目中最重要的市場結論，"
+            "請整理昨日所有節目中最重要的市場結論，"
             "以及與股市 / 投資 / 資產配置相關的具體建議或行動方案。"
             f"{_ZH_SCOPE} "
             "請依主題或優先順序分組。"
-            f"{_ZH_VOICE} 請使用繁體中文回答。"
+            f"{_ZH_VOICE} {_ZH_COMPLETE} 請使用繁體中文回答。"
         ),
     ),
 ]
@@ -210,22 +220,67 @@ def create_briefing_doc(nlm_path: str, notebook_id: str, language: str = "en") -
         print(f"  WARNING: Could not create Briefing Doc: {exc}")
 
 
-def query_notebook(nlm_path: str, notebook_id: str, question: str) -> str:
-    """Send a question to the notebook and return the text response."""
-    result = _run_nlm(nlm_path, "query", "notebook", notebook_id, question)
-    raw = result.stdout.strip()
-    # nlm returns a JSON envelope: {"value": {"answer": "...", ...}}
-    # Extract just the markdown answer text.
-    try:
-        data = json.loads(raw)
-        answer = (
-            data.get("value", {}).get("answer")
-            or data.get("answer")
-            or raw
-        )
-        return answer.strip()
-    except (json.JSONDecodeError, AttributeError):
-        return raw
+# NotebookLM citation markers: [1], [1,2], [1-3], [4–6] (en-dash), [1，2] (FW
+# comma). The outer group also consumes runs of citations separated only by
+# commas/spaces — e.g. "[1], [2], [3]" — so we don't leave dangling commas
+# behind after stripping each individual bracket.
+_ONE_CITATION = r"\[\d+(?:\s*[,，\-–]\s*\d+)*\s*\]"
+_CITATION_PATTERN = re.compile(
+    rf"\s*{_ONE_CITATION}(?:\s*[,，]?\s*{_ONE_CITATION})*"
+)
+
+
+def _clean_answer(text: str) -> str:
+    """Post-process a NotebookLM answer for human consumption.
+
+    - Strips citation markers like [1], [1-3], [1,2,5], runs like [1], [2], [3].
+    - Collapses spaces left over from the strips.
+    - Strips trailing whitespace.
+    """
+    text = _CITATION_PATTERN.sub("", text)
+    # Collapse runs of spaces inside a line (don't touch newlines)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text.strip()
+
+
+def query_notebook(
+    nlm_path: str,
+    notebook_id: str,
+    question: str,
+    max_attempts: int = 3,
+) -> str:
+    """Send a question to the notebook and return the text response.
+
+    Retries on transient `nlm` failures (occasional exit-1 with no stderr
+    when the upstream NotebookLM service hiccups). Raises the last error
+    only when every attempt fails.
+    """
+    import time
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = _run_nlm(nlm_path, "query", "notebook", notebook_id, question)
+            raw = result.stdout.strip()
+            # nlm returns a JSON envelope: {"value": {"answer": "...", ...}}
+            try:
+                data = json.loads(raw)
+                answer = (
+                    data.get("value", {}).get("answer")
+                    or data.get("answer")
+                    or raw
+                )
+            except (json.JSONDecodeError, AttributeError):
+                answer = raw
+            return _clean_answer(answer)
+        except RuntimeError as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                backoff = 5 * attempt
+                print(f"    Retry {attempt}/{max_attempts - 1} — query failed ({exc}); waiting {backoff}s")
+                time.sleep(backoff)
+
+    assert last_exc is not None
+    raise last_exc
 
 
 def query_all_sections(nlm_path: str, notebook_id: str, config: dict | None = None) -> str:
