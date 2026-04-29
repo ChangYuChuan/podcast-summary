@@ -33,6 +33,8 @@ import re
 import urllib.request
 from pathlib import Path
 
+import requests
+
 
 # ---------------------------------------------------------------------------
 # Parsing helpers
@@ -130,6 +132,46 @@ def _style_prefix(config: dict) -> str:
         "one accent colour, generous padding, bold readable sans-serif typography, "
         "square (1:1) format."
     )
+
+
+def _upload_to_public_host(image_path: Path, attempts: int = 3) -> str | None:
+    """Upload an image file to a public host and return the URL.
+
+    Bridges base64-only models (gpt-image-1, gpt-image-2) to Instagram's
+    Graph API, which requires a publicly-fetchable image URL — it cannot
+    accept binary or base64 data directly.
+
+    Uses catbox.moe (no auth, files persist). Retries on timeout/transient
+    failure since the host occasionally rejects requests under load.
+    Returns None on permanent failure so the caller can decide whether
+    to skip Instagram for that image.
+    """
+    import time
+    last_err: str = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            with open(image_path, "rb") as fh:
+                resp = requests.post(
+                    "https://catbox.moe/user/api.php",
+                    data={"reqtype": "fileupload"},
+                    files={"fileToUpload": fh},
+                    timeout=120,
+                )
+            if resp.ok:
+                url = resp.text.strip()
+                if url.startswith("http"):
+                    return url
+            last_err = f"status {resp.status_code}: {resp.text[:120]}"
+        except Exception as exc:
+            last_err = f"{type(exc).__name__}: {exc}"
+
+        if attempt < attempts:
+            backoff = 2 * attempt
+            print(f"    Catbox attempt {attempt}/{attempts} failed ({last_err}) — retrying in {backoff}s")
+            time.sleep(backoff)
+
+    print(f"    WARNING: catbox upload failed after {attempts} attempt(s): {last_err}")
+    return None
 
 
 def _build_section_prompt(
@@ -242,12 +284,22 @@ def generate(
 
             image_obj = resp.data[0]
             if getattr(image_obj, "url", None):
+                # Older models (dall-e-2/3) return a hosted URL. Use requests
+                # so we go through certifi — Python 3.14's stdlib urllib lacks
+                # system CA certs on macOS.
                 image_url: str | None = image_obj.url
-                urllib.request.urlretrieve(image_url, image_path)
+                r = requests.get(image_url, timeout=60)
+                r.raise_for_status()
+                image_path.write_bytes(r.content)
             elif getattr(image_obj, "b64_json", None):
-                image_url = None
+                # Newer models (gpt-image-1/2) only return base64.
+                # Save locally then upload to a public host so Instagram can fetch it.
                 image_path.write_bytes(base64.b64decode(image_obj.b64_json))
-                print("    NOTE: b64 data only — Instagram will skip this image.")
+                image_url = _upload_to_public_host(image_path)
+                if image_url:
+                    print(f"    Hosted : {image_url}")
+                else:
+                    print("    NOTE: no public URL — Instagram will skip this image.")
             else:
                 raise RuntimeError("No image data returned.")
 
