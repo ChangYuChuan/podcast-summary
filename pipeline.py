@@ -176,13 +176,24 @@ def run_upload(config: dict, folder_name: str) -> "str | bool":
         return False
 
 
-def run_email(config: dict, folder_name: str, notebook_id: str,
-              send_email_flag: bool = True) -> bool:
+def run_email(
+    config: dict,
+    folder_name: str,
+    notebook_id: str,
+    send_email_flag: bool | None = None,
+    generate_image_flag: bool | None = None,
+    post_instagram_flag: bool | None = None,
+) -> bool:
     import send_report
-    banner("STAGE 4 / 4 — Generate Report & Send Email")
+    banner("STAGE 4 — Generate Report & Send Email")
     t = time.time()
     try:
-        send_report.run(config, folder_name, notebook_id, send_email_flag=send_email_flag)
+        send_report.run(
+            config, folder_name, notebook_id,
+            send_email_flag=send_email_flag,
+            generate_image_flag=generate_image_flag,
+            post_instagram_flag=post_instagram_flag,
+        )
         print(f"\n[email] Done in {elapsed(t)}")
         return True
     except Exception:
@@ -351,6 +362,10 @@ def main() -> None:
                         help="Skip the data cleanup stage.")
     parser.add_argument("--save-report-only", action="store_true",
                         help="Generate and save the report to disk without sending email.")
+    parser.add_argument("--skip-image", action="store_true",
+                        help="Skip cover image generation (overrides image_generation.enabled in config).")
+    parser.add_argument("--skip-instagram", action="store_true",
+                        help="Skip Instagram posting (overrides instagram.enabled in config).")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -428,8 +443,12 @@ def main() -> None:
             print("  Re-run with --notebook-id <id> to send the email separately.")
             results["email"] = "skipped"
         else:
-            ok = run_email(config, folder_name, notebook_id,
-                           send_email_flag=not args.save_report_only)
+            ok = run_email(
+                config, folder_name, notebook_id,
+                send_email_flag=False if args.save_report_only else None,
+                generate_image_flag=False if args.skip_image else None,
+                post_instagram_flag=False if args.skip_instagram else None,
+            )
             results["email"] = ok
     else:
         results["email"] = "skipped"

@@ -159,17 +159,36 @@ def fetch_and_download(config: dict, folder_name: str | None = None) -> None:
     total_downloaded = 0
 
     for feed_cfg in config.get("feeds", []):
+        # Route YouTube channels to the dedicated fetcher
+        feed_url = feed_cfg.get("url", "")
+        is_youtube = (
+            feed_cfg.get("type", "").lower() == "youtube"
+            or "youtube.com" in feed_url
+            or "youtu.be" in feed_url
+        )
+        if is_youtube:
+            import fetch_youtube
+            fetch_youtube.fetch_channel(config, feed_cfg, run_folder)
+            continue
+
         program_name = feed_cfg["name"]
-        feed_url = feed_cfg["url"]
 
         speaker_dir = audio_root / program_name
         speaker_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"[{program_name}] Fetching feed …")
-        parsed = feedparser.parse(feed_url)
+        # Fetch with requests (uses certifi for SSL) then parse — avoids
+        # cert verification issues with Python's stdlib urllib on macOS.
+        try:
+            resp = requests.get(feed_url, timeout=30)
+            resp.raise_for_status()
+            parsed = feedparser.parse(resp.content)
+        except Exception as exc:
+            print(f"  WARNING: could not fetch feed ({feed_url}): {exc}")
+            continue
 
         if parsed.bozo and not parsed.entries:
-            print(f"  WARNING: could not parse feed ({feed_url})")
+            print(f"  WARNING: could not parse feed ({feed_url}): {parsed.bozo_exception}")
             continue
 
         found = 0

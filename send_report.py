@@ -65,6 +65,16 @@ REPORT_SECTIONS = [
         ),
     ),
     (
+        "Stocks Mentioned",
+        (
+            "List every individual stock, ticker, ETF, or company mentioned across all "
+            "episodes this period. For each: include the ticker / Chinese name, the host's "
+            "view (bullish / bearish / neutral / watch), the key reason given, and which "
+            "episode it came from. Group bullish, bearish, and watch-list ideas separately. "
+            "Only include securities the hosts actually discussed — do not invent names."
+        ),
+    ),
+    (
         "Takeaways & Action Items",
         (
             "List the most important takeaways and any concrete recommendations or action items "
@@ -72,6 +82,50 @@ REPORT_SECTIONS = [
         ),
     ),
 ]
+
+
+# Traditional Chinese default sections — used automatically when
+# whisper_language is "zh" / "zh-TW" / "zh-Hant" and no custom
+# report_sections are provided in config.
+REPORT_SECTIONS_ZH = [
+    (
+        "本期節目摘要",
+        (
+            "請針對本期的每一集 podcast / YouTube 節目，提供詳細摘要。"
+            "每一集請包含：主要主題、核心論點、提到的重要事實或數據、以及主持人的結論。"
+            "請標明每一集的節目名稱與發佈日期，並使用繁體中文回答。"
+        ),
+    ),
+    (
+        "重點主題與洞察",
+        (
+            "請辨識並分析本期所有節目中浮現的主要主題、市場趨勢與關鍵洞察。"
+            "若不同主持人之間有共識或分歧，請特別標註，並說明每個主題對投資人的意義。"
+            "請使用繁體中文回答。"
+        ),
+    ),
+    (
+        "本期提到的個股",
+        (
+            "請列出本期所有節目中被提到的每一檔個股、ETF 或公司。"
+            "針對每一檔，請包含：股票代號 / 中文名稱、主持人的看法（看多 / 看空 / 中性 / 觀察）、"
+            "提及的核心理由、以及來自哪一集節目。"
+            "請將看多、看空、觀察名單分組呈現。"
+            "只列出主持人實際討論過的標的，不要憑空產生。請使用繁體中文回答。"
+        ),
+    ),
+    (
+        "重點結論與行動建議",
+        (
+            "請整理本期所有節目中最重要的結論，以及任何具體的建議或行動方案。"
+            "請依主題或優先順序分組，並使用繁體中文回答。"
+        ),
+    ),
+]
+
+
+def _is_chinese(lang: str) -> bool:
+    return lang.lower().startswith("zh")
 
 
 # ---------------------------------------------------------------------------
@@ -88,10 +142,18 @@ def load_config(config_path: str = "config.yaml") -> dict:
 # ---------------------------------------------------------------------------
 
 def _get_report_sections(config: dict) -> list[tuple[str, str]]:
-    """Return report sections from config if defined, else use built-in defaults."""
+    """Return report sections from config if defined, else use built-in defaults.
+
+    The default template is selected by `whisper_language` — Chinese feeds
+    get Chinese prompts (which makes NotebookLM answer in Chinese) so the
+    generated email, images, and Instagram captions are all in the user's
+    expected language without extra config.
+    """
     raw = config.get("report_sections")
     if raw:
         return [(s["title"], s["prompt"]) for s in raw]
+    if _is_chinese(config.get("whisper_language", "en")):
+        return REPORT_SECTIONS_ZH
     return REPORT_SECTIONS
 
 
@@ -403,7 +465,14 @@ def save_report(config: dict, folder_name: str, body: str) -> Path:
     return report_path
 
 
-def run(config: dict, folder_name: str, notebook_id: str, send_email_flag: bool = True) -> None:
+def run(
+    config: dict,
+    folder_name: str,
+    notebook_id: str,
+    send_email_flag: bool | None = None,
+    generate_image_flag: bool | None = None,
+    post_instagram_flag: bool | None = None,
+) -> None:
     nlm_path        = config.get("nlm_path", "nlm")
     notebook_prefix = config.get("notebooklm_notebook_prefix", "Podcast Summary")
     date_range      = _format_date_range(folder_name)
@@ -434,14 +503,46 @@ def run(config: dict, folder_name: str, notebook_id: str, send_email_flag: bool 
 
     # Step 4: Save report to disk
     print("\nSaving report …")
-    save_report(config, folder_name, plain_body)
+    report_path = save_report(config, folder_name, plain_body)
 
-    # Step 5: Send the email (skipped when send_email_flag=False)
-    if send_email_flag:
+    # Step 5: Send the email — flag overrides config; config defaults to True
+    email_cfg = config.get("email", {})
+    do_email = send_email_flag if send_email_flag is not None else email_cfg.get("enabled", True)
+
+    if do_email:
         print("\nSending email report …")
         send_email(config, subject, plain_body, html_body)
     else:
-        print("\nEmail sending skipped (save-report-only mode).")
+        print("\nEmail sending skipped (disabled in config or save-report-only mode).")
+
+    # Step 6: Generate images — one per report section (optional, non-fatal)
+    image_cfg = config.get("image_generation", {})
+    do_image = generate_image_flag if generate_image_flag is not None else image_cfg.get("enabled", False)
+    images: list[tuple[str | None, object]] = []
+
+    if do_image:
+        print("\nGenerating images …")
+        try:
+            import generate_image as _gen_image
+            images = _gen_image.generate(config, summary, folder_name, report_path.parent)
+        except Exception as exc:
+            print(f"  WARNING: Image generation failed — {exc}")
+
+    # Step 7: Post to Instagram (optional, non-fatal)
+    ig_cfg = config.get("instagram", {})
+    do_instagram = post_instagram_flag if post_instagram_flag is not None else ig_cfg.get("enabled", False)
+
+    if do_instagram:
+        image_urls = [url for url, _ in images if url]
+        if not image_urls:
+            print("\nInstagram posting skipped — no public image URLs available.")
+        else:
+            print(f"\nPosting {len(image_urls)} image(s) to Instagram …")
+            try:
+                import post_instagram as _post_ig
+                _post_ig.post(config, image_urls, folder_name, summary=summary)
+            except Exception as exc:
+                print(f"  WARNING: Instagram posting failed — {exc}")
 
 
 # ---------------------------------------------------------------------------
