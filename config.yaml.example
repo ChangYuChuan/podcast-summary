@@ -130,22 +130,48 @@ instagram:
   api_version: v21.0
   # language: zh              # override (defaults to whisper_language)
   # caption_template: "..."   # advanced: placeholders {report_title} {date_range}
+  # caption_heading_zh: "本期推薦書單"   # custom carousel section heading
+  # caption_heading_en: "Books covered"
+  # hashtags_zh: "#讀書 #推薦書單 #自我成長"
+  # hashtags_en: "#books #reading #weekly"
   # access_token: ""          # prefer INSTAGRAM_ACCESS_TOKEN env var
 
 # ---------------------------------------------------------------------------
 # Report mode (optional, default: "sections")
 #   sections — fixed sections (Episode Summaries / Themes / Stocks / Takeaways).
 #              Each section becomes one image in the Instagram carousel.
-#   stocks   — discovers every individual stock discussed and produces ONE
-#              section per stock with focused content (view, reasons, risks,
-#              catalysts, target). Each stock becomes one image in the
-#              carousel — capped at image_generation.max_images (Instagram's
-#              carousel limit is 10).
+#   discover — discovers every individual item discussed and produces ONE
+#              section per item. The discovery + per-item prompts are
+#              fully overridable in the `discovery:` block below — use this
+#              to frame the digest around stocks, news, products, books,
+#              destinations, anything. Each item becomes one image in the
+#              carousel — capped at image_generation.max_images
+#              (Instagram's carousel limit is 10).
+#              `stocks` is kept as a back-compat alias for `discover`.
 #
 # All built-in prompts are source-neutral: the generated post never names
 # the underlying podcasts, YouTube channels, or hosts.
 # ---------------------------------------------------------------------------
-report_mode: stocks
+report_mode: discover
+
+# ---------------------------------------------------------------------------
+# Discover-mode prompts (optional)
+# When omitted, defaults to a Traditional-Chinese stock-oriented digest
+# (公司近況 / 基本面 / 技術面 / 風險 / 關鍵數字), no buy/sell stance.
+#
+# To frame the digest differently — e.g. one item per AI-tool mentioned,
+# one item per book recommended, one item per destination — override
+# `prompt` and `detail_template`. detail_template MUST contain `{item}`.
+# ---------------------------------------------------------------------------
+# discovery:
+#   prompt: |
+#     請列出資料來源中所有被推薦或介紹的書籍...
+#     格式要求：每一本獨立成行，使用「1. 書名 (作者)」格式...
+#   detail_template: |
+#     請針對「{item}」這本書，根據資料來源中的討論，整理出一份客觀筆記。
+#     涵蓋：核心觀點、適合讀者、推薦理由、可能的反對意見...
+#   caption_heading_zh: "本期推薦書單"
+#   caption_heading_en: "Books covered"
 
 # ---------------------------------------------------------------------------
 # Custom report sections (optional, ignored when report_mode: stocks)

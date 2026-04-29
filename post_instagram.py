@@ -225,7 +225,7 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
     report_title = config.get("report_title", "Podcast Digest")
     date_range = _format_date_range(folder_name)
     chinese = _is_chinese(config)
-    stocks_mode = config.get("report_mode") == "stocks"
+    discover_mode = config.get("report_mode") in ("discover", "stocks")
 
     template = ig_cfg.get("caption_template")
     if template:
@@ -233,28 +233,49 @@ def _build_caption(config: dict, folder_name: str, summary: str | None) -> str:
             template.format(report_title=report_title, date_range=date_range)
         )
 
-    # ── Stocks mode: caption is a roll-call of the stocks covered ───────────
-    if stocks_mode:
+    # ── Discover mode: caption is a roll-call of the items covered ──────────
+    if discover_mode:
+        discovery_cfg = config.get("discovery") or {}
+        instagram_cfg = config.get("instagram") or {}
+
         blocks = _stocks_mode_blocks(summary)
         if chinese:
+            heading = (
+                discovery_cfg.get("caption_heading_zh")
+                or instagram_cfg.get("caption_heading_zh")
+                or "本期重點個股"
+            )
+            hashtags = (
+                instagram_cfg.get("hashtags_zh")
+                or "#股市 #投資 #台股 #美股 #個股分析 #財經"
+            )
             parts = [f"🎙《{report_title}》", f"📅 {date_range}", ""]
             if blocks:
-                parts.append("📈 本期重點個股")
-                for stock_name, body in blocks:
+                parts.append(f"📈 {heading}")
+                for item_name, body in blocks:
                     one = _stock_oneliner(body)
-                    parts.append(f"• {stock_name} — {one}" if one else f"• {stock_name}")
+                    parts.append(f"• {item_name} — {one}" if one else f"• {item_name}")
                 parts.append("")
-            parts.append("#股市 #投資 #台股 #美股 #個股分析 #財經")
+            parts.append(hashtags)
             return _trim_caption("\n".join(parts).rstrip())
 
+        heading = (
+            discovery_cfg.get("caption_heading_en")
+            or instagram_cfg.get("caption_heading_en")
+            or "Items covered"
+        )
+        hashtags = (
+            instagram_cfg.get("hashtags_en")
+            or "#digest #investing #stocks #markets"
+        )
         parts = [f"🎙 {report_title}", f"📅 {date_range}", ""]
         if blocks:
-            parts.append("Stocks covered")
-            for stock_name, body in blocks:
+            parts.append(heading)
+            for item_name, body in blocks:
                 one = _stock_oneliner(body)
-                parts.append(f"• {stock_name} — {one}" if one else f"• {stock_name}")
+                parts.append(f"• {item_name} — {one}" if one else f"• {item_name}")
             parts.append("")
-        parts.append("#stocks #investing #digest #markets")
+        parts.append(hashtags)
         return _trim_caption("\n".join(parts).rstrip())
 
     # ── Sections mode (default, unchanged) ─────────────────────────────────
