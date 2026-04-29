@@ -36,6 +36,15 @@ import requests
 # Instagram caption hard cap is 2,200 chars; keep well below to leave headroom.
 MAX_CAPTION_CHARS = 2_000
 
+# Per-request timeout. Container creation involves Instagram's servers
+# fetching the image from our host (e.g. tmpfiles.org) which can be slow,
+# so be generous on the upload-y endpoints.
+IG_REQUEST_TIMEOUT = 90
+
+# Total retries for transient failures (timeouts, 5xx, connection drops)
+# on each Graph API call. Doesn't retry permanent errors like 4xx.
+IG_RETRY_ATTEMPTS = 3
+
 
 def _format_date_range(folder_name: str) -> str:
     try:
@@ -222,6 +231,49 @@ def _check_response(resp: requests.Response, action: str) -> None:
     raise RuntimeError(f"Instagram API error during {action}: {msg}")
 
 
+def _ig_request(
+    method: str,
+    url: str,
+    *,
+    params: dict | None = None,
+    action: str,
+    timeout: int = IG_REQUEST_TIMEOUT,
+    attempts: int = IG_RETRY_ATTEMPTS,
+) -> requests.Response:
+    """Wrap a Graph API call with retry on transient errors.
+
+    Retries on connection errors / read timeouts (network) and 5xx
+    responses. Permanent client-side errors (4xx) are raised immediately
+    via _check_response so we don't hammer the API on a bad request.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.request(method, url, params=params, timeout=timeout)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_exc = exc
+            if attempt < attempts:
+                backoff = 5 * attempt
+                print(f"    {action}: {type(exc).__name__} — retry {attempt}/{attempts - 1} in {backoff}s")
+                time.sleep(backoff)
+            continue
+
+        if resp.ok:
+            return resp
+        # Retry server-side errors; surface client errors immediately
+        if 500 <= resp.status_code < 600 and attempt < attempts:
+            backoff = 5 * attempt
+            print(f"    {action}: HTTP {resp.status_code} — retry {attempt}/{attempts - 1} in {backoff}s")
+            time.sleep(backoff)
+            last_exc = RuntimeError(f"HTTP {resp.status_code}")
+            continue
+        _check_response(resp, action)  # raises
+
+    raise RuntimeError(
+        f"Instagram API error during {action}: exhausted {attempts} attempts ({last_exc})"
+    )
+
+
 def _wait_for_container(
     base_url: str,
     container_id: str,
@@ -231,12 +283,13 @@ def _wait_for_container(
 ) -> None:
     """Poll until the media container status is FINISHED or raise on ERROR/timeout."""
     for attempt in range(max_attempts):
-        resp = requests.get(
+        resp = _ig_request(
+            "GET",
             f"{base_url}/{container_id}",
             params={"fields": "status_code", "access_token": access_token},
+            action="poll container status",
             timeout=30,
         )
-        _check_response(resp, "poll container status")
         status = resp.json().get("status_code", "IN_PROGRESS")
         if status == "FINISHED":
             return
@@ -252,24 +305,24 @@ def _post_single(
 ) -> str:
     """Create a single-image post and return the published media ID."""
     print("  Creating media container …")
-    resp = requests.post(
+    resp = _ig_request(
+        "POST",
         f"{base_url}/{user_id}/media",
         params={"image_url": image_url, "caption": caption, "access_token": access_token},
-        timeout=30,
+        action="create media container",
     )
-    _check_response(resp, "create media container")
     container_id = resp.json()["id"]
     print(f"  Container ID : {container_id}")
 
     _wait_for_container(base_url, container_id, access_token)
 
     print("  Publishing …")
-    resp = requests.post(
+    resp = _ig_request(
+        "POST",
         f"{base_url}/{user_id}/media_publish",
         params={"creation_id": container_id, "access_token": access_token},
-        timeout=30,
+        action="publish media",
     )
-    _check_response(resp, "publish media")
     media_id = resp.json()["id"]
     print(f"  Published! Media ID : {media_id}")
     return media_id
@@ -283,21 +336,22 @@ def _post_carousel(
     child_ids: list[str] = []
     for i, url in enumerate(image_urls, 1):
         print(f"  Creating child container {i}/{len(image_urls)} …")
-        resp = requests.post(
+        resp = _ig_request(
+            "POST",
             f"{base_url}/{user_id}/media",
             params={
                 "image_url": url,
                 "is_carousel_item": "true",
                 "access_token": access_token,
             },
-            timeout=30,
+            action=f"create carousel child {i}",
         )
-        _check_response(resp, f"create carousel child {i}")
         child_ids.append(resp.json()["id"])
 
     # Step 2 — Create the carousel container referencing all children
     print("  Creating carousel container …")
-    resp = requests.post(
+    resp = _ig_request(
+        "POST",
         f"{base_url}/{user_id}/media",
         params={
             "media_type": "CAROUSEL",
@@ -305,9 +359,8 @@ def _post_carousel(
             "caption": caption,
             "access_token": access_token,
         },
-        timeout=30,
+        action="create carousel container",
     )
-    _check_response(resp, "create carousel container")
     carousel_id = resp.json()["id"]
     print(f"  Carousel ID : {carousel_id}")
 
@@ -316,12 +369,12 @@ def _post_carousel(
 
     # Step 4 — Publish
     print("  Publishing carousel …")
-    resp = requests.post(
+    resp = _ig_request(
+        "POST",
         f"{base_url}/{user_id}/media_publish",
         params={"creation_id": carousel_id, "access_token": access_token},
-        timeout=30,
+        action="publish carousel",
     )
-    _check_response(resp, "publish carousel")
     media_id = resp.json()["id"]
     print(f"  Published! Media ID : {media_id}")
     return media_id
@@ -333,12 +386,13 @@ def _resolve_user_id(base_url: str, access_token: str, ig_cfg: dict) -> str:
     if user_id:
         return user_id
     print("  Resolving Instagram user ID from token …")
-    resp = requests.get(
+    resp = _ig_request(
+        "GET",
         f"{base_url}/me",
         params={"fields": "id,username", "access_token": access_token},
+        action="resolve user ID",
         timeout=30,
     )
-    _check_response(resp, "resolve user ID")
     data = resp.json()
     user_id = data.get("id", "")
     if not user_id:
