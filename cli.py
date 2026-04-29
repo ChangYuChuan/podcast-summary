@@ -85,18 +85,24 @@ def _find_all_crons(lines: list[str]) -> list[tuple[int, str]]:
     return results
 
 
-def _write_zprofile_var(var_name: str, value: str) -> None:
-    """Write or update an export line in ~/.zprofile."""
-    zprofile = Path.home() / ".zprofile"
+def _write_shell_env_var(var_name: str, value: str) -> None:
+    """Write or update an `export VAR="value"` line in ~/.zshenv.
+
+    We use ~/.zshenv (not ~/.zprofile) so the variable is visible to *every*
+    shell — interactive, non-interactive, and subprocesses spawned by `psum`
+    (e.g. the pipeline.py invocation that needs OPENAI_API_KEY). ~/.zprofile
+    is only sourced for login shells, which is the wrong scope here.
+    """
+    target = Path.home() / ".zshenv"
     new_line = f'export {var_name}="{value}"'
     pattern = re.compile(rf"^export\s+{re.escape(var_name)}\s*=")
 
-    if zprofile.exists():
-        lines = zprofile.read_text(encoding="utf-8").splitlines(keepends=True)
+    if target.exists():
+        lines = target.read_text(encoding="utf-8").splitlines(keepends=True)
         for i, line in enumerate(lines):
             if pattern.match(line):
                 lines[i] = new_line + "\n"
-                zprofile.write_text("".join(lines), encoding="utf-8")
+                target.write_text("".join(lines), encoding="utf-8")
                 return
         content = "".join(lines)
     else:
@@ -105,7 +111,7 @@ def _write_zprofile_var(var_name: str, value: str) -> None:
     if content and not content.endswith("\n"):
         content += "\n"
     content += new_line + "\n"
-    zprofile.write_text(content, encoding="utf-8")
+    target.write_text(content, encoding="utf-8")
 
 
 def _list_config_files() -> list[Path]:
@@ -384,22 +390,22 @@ def _run_config_wizard(config_path: Path, sections: Optional[set[str]] = None) -
         if existing_password:
             click.echo("  EMAIL_SMTP_PASSWORD is already set in environment.")
             if click.confirm("  Update it?", default=False):
-                pw = click.prompt("Gmail App Password (saved to ~/.zprofile)", hide_input=True)
-                _write_zprofile_var("EMAIL_SMTP_PASSWORD", pw)
-                click.echo("  ✓ Saved to ~/.zprofile")
+                pw = click.prompt("Gmail App Password (saved to ~/.zshenv)", hide_input=True)
+                _write_shell_env_var("EMAIL_SMTP_PASSWORD", pw)
+                click.echo("  ✓ Saved to ~/.zshenv")
                 smtp_password = pw
             else:
                 smtp_password = existing_password
         else:
             if click.confirm("Set Gmail App Password now? [needed for email stage]", default=False):
                 smtp_password = click.prompt(
-                    "Gmail App Password (saved to ~/.zprofile)", hide_input=True
+                    "Gmail App Password (saved to ~/.zshenv)", hide_input=True
                 )
-                _write_zprofile_var("EMAIL_SMTP_PASSWORD", smtp_password)
-                click.echo("  ✓ Saved to ~/.zprofile")
+                _write_shell_env_var("EMAIL_SMTP_PASSWORD", smtp_password)
+                click.echo("  ✓ Saved to ~/.zshenv")
             else:
                 smtp_password = ""
-                click.echo("  Skipped — set EMAIL_SMTP_PASSWORD in ~/.zprofile before using the email stage.")
+                click.echo("  Skipped — set EMAIL_SMTP_PASSWORD in ~/.zshenv before using the email stage.")
 
         # Sender
         from_email = _prompt_or_skip("Sender email (Gmail address)", email_cfg.get("from", ""))
@@ -510,14 +516,14 @@ def _run_config_wizard(config_path: Path, sections: Optional[set[str]] = None) -
                 click.echo("  OPENAI_API_KEY is already set in environment.")
                 if click.confirm("  Update it?", default=False):
                     new_key = click.prompt("  OpenAI API key", hide_input=True)
-                    _write_zprofile_var("OPENAI_API_KEY", new_key)
-                    click.echo("  ✓ Saved to ~/.zprofile")
+                    _write_shell_env_var("OPENAI_API_KEY", new_key)
+                    click.echo("  ✓ Saved to ~/.zshenv")
             else:
                 click.echo("  OPENAI_API_KEY is not set.")
                 if click.confirm("  Set it now?", default=True):
                     new_key = click.prompt("  OpenAI API key", hide_input=True)
-                    _write_zprofile_var("OPENAI_API_KEY", new_key)
-                    click.echo("  ✓ Saved to ~/.zprofile")
+                    _write_shell_env_var("OPENAI_API_KEY", new_key)
+                    click.echo("  ✓ Saved to ~/.zshenv")
                 else:
                     click.echo("  Skipped — export OPENAI_API_KEY=<key> before running.")
 
@@ -578,14 +584,14 @@ def _run_config_wizard(config_path: Path, sections: Optional[set[str]] = None) -
                 click.echo("  INSTAGRAM_ACCESS_TOKEN is already set in environment.")
                 if click.confirm("  Update it?", default=False):
                     new_token = click.prompt("  Instagram long-lived access token", hide_input=True)
-                    _write_zprofile_var("INSTAGRAM_ACCESS_TOKEN", new_token)
-                    click.echo("  ✓ Saved to ~/.zprofile")
+                    _write_shell_env_var("INSTAGRAM_ACCESS_TOKEN", new_token)
+                    click.echo("  ✓ Saved to ~/.zshenv")
             else:
                 click.echo("  INSTAGRAM_ACCESS_TOKEN is not set.")
                 if click.confirm("  Set it now?", default=True):
                     new_token = click.prompt("  Instagram long-lived access token", hide_input=True)
-                    _write_zprofile_var("INSTAGRAM_ACCESS_TOKEN", new_token)
-                    click.echo("  ✓ Saved to ~/.zprofile")
+                    _write_shell_env_var("INSTAGRAM_ACCESS_TOKEN", new_token)
+                    click.echo("  ✓ Saved to ~/.zshenv")
                 else:
                     click.echo("  Skipped — export INSTAGRAM_ACCESS_TOKEN=<token> before running.")
 

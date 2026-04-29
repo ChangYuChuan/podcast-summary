@@ -44,9 +44,9 @@ git clone <repo-url> && cd podcast-summary
 python3.11 -m venv ~/.config/psum/venv
 ~/.config/psum/venv/bin/pip install -e .
 
-# 3. Add to PATH
-echo 'export PATH="$HOME/.config/psum/venv/bin:$PATH"' >> ~/.zprofile
-source ~/.zprofile
+# 3. Add to PATH (use ~/.zshenv so subprocesses + cron jobs see it too)
+echo 'export PATH="$HOME/.config/psum/venv/bin:$PATH"' >> ~/.zshenv
+source ~/.zshenv
 
 # 4. Create the pipeline venv (heavier dependencies: whisper, feedparser, etc.)
 python3.11 -m venv venv
@@ -134,7 +134,7 @@ email:
 ```
 
 ```bash
-export EMAIL_SMTP_PASSWORD="your-gmail-app-password"   # add to ~/.zprofile
+export EMAIL_SMTP_PASSWORD="your-gmail-app-password"   # add to ~/.zshenv
 ```
 
 ### Schedule
@@ -180,7 +180,7 @@ image_generation:
 ```
 
 ```bash
-export OPENAI_API_KEY="sk-..."   # add to ~/.zprofile
+export OPENAI_API_KEY="sk-..."   # add to ~/.zshenv
 ```
 
 **Note:** `gpt-image-2` (and the `gpt-image-*` family) only return base64 image data. To bridge the gap to Instagram's Graph API — which requires a publicly-fetchable URL — generated images are saved locally **and** uploaded to [catbox.moe](https://catbox.moe) (no auth required, persistent URLs). The catbox URL is what gets sent to Instagram. `dall-e-3` returns a hosted URL directly and skips this step.
@@ -200,7 +200,7 @@ instagram:
 ```
 
 ```bash
-export INSTAGRAM_ACCESS_TOKEN="your-long-lived-token"   # add to ~/.zprofile
+export INSTAGRAM_ACCESS_TOKEN="your-long-lived-token"   # add to ~/.zshenv
 ```
 
 Requires an Instagram Business or Creator account linked to a Facebook App with `instagram_content_publish` permission.

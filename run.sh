@@ -1,14 +1,18 @@
 #!/bin/zsh
 # run.sh — Wrapper script for the podcast-summary pipeline.
 #
-# Sources ~/.zprofile so that EMAIL_SMTP_PASSWORD and other env vars
-# are available even when invoked from cron (which runs with a bare environment).
+# Sources ~/.zshenv (and ~/.zprofile as a fallback) so EMAIL_SMTP_PASSWORD,
+# OPENAI_API_KEY, INSTAGRAM_ACCESS_TOKEN, and any other exports are available
+# even when invoked from cron (which runs with a bare environment).
 #
 # All arguments are forwarded to pipeline.py — use --config to select a config:
 #   psum cron install --name my-job --schedule "0 8 * * 0"
 #   (generates: 0 8 * * 0 /path/to/run.sh --config /path/to/config.yaml)
 
-source ~/.zprofile
+# `psum init` writes env vars to ~/.zshenv; older setups put them in ~/.zprofile,
+# so source both (later sourcing wins, but neither file should redefine the same var).
+[ -f ~/.zshenv  ] && source ~/.zshenv
+[ -f ~/.zprofile ] && source ~/.zprofile
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
