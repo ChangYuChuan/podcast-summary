@@ -161,43 +161,96 @@ def _style_prefix(config: dict) -> str:
     )
 
 
-def _upload_to_public_host(image_path: Path, attempts: int = 3) -> str | None:
-    """Upload an image file to a public host and return the URL.
+def _verify_url_content(url: str, expected_min_bytes: int = 1024) -> bool:
+    """Fetch `url` and verify it returns at least `expected_min_bytes` of data.
+
+    catbox.moe sometimes returns HTTP 200 with a URL but stores a 0-byte file
+    silently; Instagram then rejects the empty image with an "unknown error".
+    This guards against that whole class of failure.
+    """
+    try:
+        r = requests.get(url, timeout=30)
+        if not r.ok:
+            return False
+        return len(r.content) >= expected_min_bytes
+    except Exception:
+        return False
+
+
+def _upload_catbox(image_path: Path) -> str | None:
+    """Upload to catbox.moe (no auth, persistent URLs)."""
+    with open(image_path, "rb") as fh:
+        resp = requests.post(
+            "https://catbox.moe/user/api.php",
+            data={"reqtype": "fileupload"},
+            files={"fileToUpload": fh},
+            timeout=120,
+        )
+    if not resp.ok:
+        raise RuntimeError(f"status {resp.status_code}: {resp.text[:120]}")
+    url = resp.text.strip()
+    if not url.startswith("http"):
+        raise RuntimeError(f"unexpected response: {resp.text[:120]}")
+    return url
+
+
+def _upload_uguu(image_path: Path) -> str | None:
+    """Fallback host. Files are temporary (~few hours) but plenty long enough
+    for Instagram to fetch them during media-container creation.
+    """
+    with open(image_path, "rb") as fh:
+        resp = requests.post(
+            "https://uguu.se/upload",
+            files={"files[]": (image_path.name, fh, "image/png")},
+            timeout=120,
+        )
+    if not resp.ok:
+        raise RuntimeError(f"status {resp.status_code}: {resp.text[:120]}")
+    data = resp.json()
+    files = data.get("files") or []
+    if not files or not files[0].get("url"):
+        raise RuntimeError(f"unexpected response: {resp.text[:200]}")
+    return files[0]["url"]
+
+
+_HOSTS: list[tuple[str, callable]] = [  # type: ignore[type-arg]
+    ("catbox.moe", _upload_catbox),
+    ("uguu.se", _upload_uguu),
+]
+
+
+def _upload_to_public_host(image_path: Path, attempts_per_host: int = 2) -> str | None:
+    """Upload an image to a public host and return a verified URL.
 
     Bridges base64-only models (gpt-image-1, gpt-image-2) to Instagram's
     Graph API, which requires a publicly-fetchable image URL — it cannot
     accept binary or base64 data directly.
 
-    Uses catbox.moe (no auth, files persist). Retries on timeout/transient
-    failure since the host occasionally rejects requests under load.
-    Returns None on permanent failure so the caller can decide whether
-    to skip Instagram for that image.
+    Tries each host in order and verifies each returned URL by re-fetching
+    it; some hosts (catbox.moe in particular) intermittently respond 200 OK
+    with a URL while silently storing a 0-byte file. Returns None when all
+    hosts fail so the caller can skip Instagram for that single image.
     """
     import time
-    last_err: str = ""
-    for attempt in range(1, attempts + 1):
-        try:
-            with open(image_path, "rb") as fh:
-                resp = requests.post(
-                    "https://catbox.moe/user/api.php",
-                    data={"reqtype": "fileupload"},
-                    files={"fileToUpload": fh},
-                    timeout=120,
-                )
-            if resp.ok:
-                url = resp.text.strip()
-                if url.startswith("http"):
+    last_err = ""
+    for host_name, uploader in _HOSTS:
+        for attempt in range(1, attempts_per_host + 1):
+            try:
+                url = uploader(image_path)
+            except Exception as exc:
+                last_err = f"{host_name}: {type(exc).__name__}: {exc}"
+            else:
+                if url and _verify_url_content(url):
                     return url
-            last_err = f"status {resp.status_code}: {resp.text[:120]}"
-        except Exception as exc:
-            last_err = f"{type(exc).__name__}: {exc}"
+                last_err = f"{host_name}: returned URL but content is empty/unreadable ({url})"
 
-        if attempt < attempts:
-            backoff = 2 * attempt
-            print(f"    Catbox attempt {attempt}/{attempts} failed ({last_err}) — retrying in {backoff}s")
-            time.sleep(backoff)
+            if attempt < attempts_per_host:
+                backoff = 2 * attempt
+                print(f"    {host_name} attempt {attempt}/{attempts_per_host} failed ({last_err}) — retrying in {backoff}s")
+                time.sleep(backoff)
+        print(f"    {host_name} unavailable — trying next host")
 
-    print(f"    WARNING: catbox upload failed after {attempts} attempt(s): {last_err}")
+    print(f"    WARNING: all hosts failed for {image_path.name}: {last_err}")
     return None
 
 
