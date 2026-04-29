@@ -158,7 +158,9 @@ def _style_prefix(config: dict) -> str:
             "重點處可以用一點粉藍或薄荷綠點綴，整體風格乾淨、可愛、討喜。"
             "邊距留白寬鬆，使用清晰、現代的繁體中文無襯線字型（例如思源黑體 / Noto Sans TC）。"
             "嚴禁出現任何簡體中文字，所有字皆需為繁體中文。"
-            "嚴禁使用紅色 / 黃色 / 黑底等對比過強的配色。"
+            "**背景與整體版面**請避免使用紅色 / 黃色 / 黑色等高飽和或對比過強的配色，"
+            "但若插畫角色（例如吉祥物）本身的固有毛色 / 膚色就是紅棕色或暖色系，"
+            "請依角色的設定如實繪製，不受此限制。"
         )
     return (
         "Cute, clean Instagram infographic card, square 1:1. "
@@ -187,6 +189,18 @@ def _disclaimer_text(config: dict) -> str:
     """Return the disclaimer line to render at the bottom of every card, or ''."""
     image_cfg = config.get("image_generation", {})
     text = image_cfg.get("disclaimer")
+    return str(text).strip() if text else ""
+
+
+def _mascot_description(config: dict) -> str:
+    """Return a short description of a mascot to render on every card, or ''.
+
+    Lets the user brand the cards with a recurring character — e.g. their pet —
+    without re-uploading a reference image. The description is fed into the
+    prompt so the model paints a consistent mascot illustration on each card.
+    """
+    image_cfg = config.get("image_generation", {})
+    text = image_cfg.get("mascot")
     return str(text).strip() if text else ""
 
 
@@ -381,9 +395,16 @@ def _build_section_prompt(
     chinese = _is_chinese(config)
     signature = _signature_text(config)
     disclaimer = _disclaimer_text(config)
+    mascot = _mascot_description(config)
 
     if style == "illustration":
         if chinese:
+            mascot_zh = (
+                f"卡片中放入一個吉祥物角色：{mascot}。"
+                "整組卡片中吉祥物的造型 / 顏色 / 比例必須完全一致，"
+                "可愛、友善的卡通風格，與背景色調搭配。"
+                if mascot else ""
+            )
             footer_lines_zh: list[str] = []
             if disclaimer:
                 footer_lines_zh.append(
@@ -399,7 +420,7 @@ def _build_section_prompt(
             return (
                 f"{'（' + card_label + '）' if card_label else ''}"
                 f"為《{report_title}》（{date_range}）的「{title}」段落設計一張 Instagram 插畫。"
-                f"{prefix} 主題內容：{themes} {footer_zh}"
+                f"{prefix} 主題內容：{themes} {mascot_zh} {footer_zh}"
             )
         footer_en_parts: list[str] = []
         if disclaimer:
@@ -421,6 +442,15 @@ def _build_section_prompt(
     # Default: infographic summary card
     if chinese:
         zh_label = f"（{card_label}）" if card_label else ""
+        mascot_zh = ""
+        if mascot:
+            mascot_zh = (
+                f"\n吉祥物：在卡片角落放一個小小的吉祥物角色 — {mascot}。"
+                "請以可愛、友善的扁平卡通風格繪製，比例約佔卡片邊長的 12–18%，"
+                "位置可放在右上、左上或角落空白處（不要遮住主要文字）。"
+                "整組卡片中，這個吉祥物的造型、顏色、姿態風格必須**完全一致**，"
+                "讓所有卡片看起來像同一個角色出演的系列。"
+            )
         footer_zh = ""
         if disclaimer or signature:
             lines = ["\n卡片底部依序放置以下兩行（如有）："]
@@ -442,11 +472,21 @@ def _build_section_prompt(
             f"視覺風格：{prefix}\n"
             "排版：段落標題以粗體放在卡片頂部，每一個重點獨立成一行，"
             "字體在手機上要清晰易讀；不要使用裝飾性元素干擾文字閱讀，留白要充足。"
+            f"{mascot_zh}"
             f"{footer_zh}\n"
             "重要：所有文字必須是正確的繁體中文（不可出現簡體字、亂碼、英文亂譯）。\n"
             "嚴禁在卡片上出現任何 podcast、YouTube、節目、頻道、集數、主持人或來賓的名稱。"
         )
 
+    mascot_en = ""
+    if mascot:
+        mascot_en = (
+            f"\nMascot: tuck a small recurring mascot into a corner — {mascot}. "
+            "Cute, flat cartoon style, ~12–18% of the card edge, positioned in a "
+            "corner so it doesn't overlap the main text. The mascot's design, "
+            "colours, and pose style must stay **identical** across every card "
+            "in the set so the carousel reads as one consistent character."
+        )
     footer_en = ""
     if disclaimer or signature:
         footer_en_lines = ["\nFooter (in this order, near the very bottom of the card):"]
@@ -465,7 +505,8 @@ def _build_section_prompt(
         f"Display exactly these points as the main content:\n{highlights}\n\n"
         f"Visual style: {prefix}\n"
         "Layout: bold section title at top, each point on its own line, "
-        f"readable at mobile size. No decorative clutter — let the text breathe.{footer_en}"
+        f"readable at mobile size. No decorative clutter — let the text breathe."
+        f"{mascot_en}{footer_en}"
     )
 
 

@@ -112,6 +112,11 @@ image_generation:
   # disclaimer: "Personal notes — not investment advice"
                                  # rendered above the signature in soft grey;
                                  # use this for "not financial advice" copy
+  # mascot: "A cute fluffy red toy poodle named Q比 with round eyes …"
+                                 # describes a recurring character to render
+                                 # in a corner of every card. The model is
+                                 # asked to keep its look consistent across
+                                 # the carousel.
   # style_base: "..."         # shared visual style for cohesion across cards
   # prompt_template: "..."    # advanced: full prompt override
 
