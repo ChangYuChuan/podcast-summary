@@ -171,23 +171,46 @@ def _trim_caption(text: str) -> str:
     return text[: MAX_CAPTION_CHARS - 1].rstrip() + "…"
 
 
-def _stock_oneliner(body: str) -> str:
-    """Pull a single descriptive line out of a per-stock section body.
+# Subjective / recommendation language — stripped from caption one-liners so
+# the post stays neutral. Lines that are *just* a stance phrase get skipped;
+# lines where it's a prefix get the prefix stripped.
+_STANCE_TERMS = (
+    "看多", "看空", "看好", "不看好", "看淡", "中性", "觀察", "中立",
+    "整體看法", "看法",
+    "建議買進", "建議賣出", "建議布局", "進場", "出場", "逢低買進", "值得布局",
+    "Overall view", "View", "Bullish", "Bearish",
+)
+_STANCE_PREFIX_RE = re.compile(
+    r"^\s*(?:" + "|".join(re.escape(t) for t in _STANCE_TERMS) + r")\s*[：:、，,。.\-—]*\s*"
+)
 
-    Looks for the "整體看法" / "看法" line first (which the prompt asks for
-    explicitly) and falls back to the first usable bullet otherwise. Trims
-    to ~90 chars so the caption stays readable when many stocks are listed.
+
+def _looks_like_stance_only(text: str) -> bool:
+    stripped = text.strip().rstrip("。.！!").rstrip("，,、")
+    return any(stripped == t or stripped == t + "。" for t in _STANCE_TERMS)
+
+
+def _strip_stance_prefix(text: str) -> str:
+    return _STANCE_PREFIX_RE.sub("", text).strip()
+
+
+def _stock_oneliner(body: str) -> str:
+    """Pull a neutral, factual one-liner out of a per-stock section body.
+
+    Skips bullets that are pure stance / recommendation language and trims
+    any stance prefix off the remaining ones. After stripping we re-check
+    that what's left isn't itself just a stance term (covers cases like
+    "看法：看多" → strip "看法：" → "看多" which we should skip too).
     """
     bullets = _bullets(body, max_items=8)
-    if not bullets:
-        return ""
-    # Prefer the line that describes the stance
     for b in bullets:
-        if b.startswith(("整體看法", "看法", "Overall view", "View")):
-            text = b.split("：", 1)[-1].split(":", 1)[-1].strip() or b
-            return text[:90]
-    text = bullets[0]
-    return text[:90]
+        if _looks_like_stance_only(b):
+            continue
+        text = _strip_stance_prefix(b).strip()
+        if not text or _looks_like_stance_only(text) or len(text) < 5:
+            continue
+        return text[:90]
+    return ""
 
 
 def _stocks_mode_blocks(summary: str | None) -> list[tuple[str, str]]:
