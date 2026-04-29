@@ -53,15 +53,21 @@ def _is_chinese(config: dict) -> bool:
 
 
 def _section_blocks(summary: str) -> list[tuple[str, str]]:
-    """Split the report into [(title, body)] pairs."""
-    blocks = []
-    for chunk in summary.split("\n\n---\n\n"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        lines = chunk.splitlines()
-        title = lines[0].lstrip("#").strip()
-        body = "\n".join(lines[1:]).strip()
+    """Split the report into [(title, body)] pairs.
+
+    Splits on `## ` markdown headers (top-level section markers from
+    send_report.query_all_sections) instead of `---` separators —
+    NotebookLM answers contain internal horizontal rules that would
+    otherwise chop one section into many.
+    """
+    pattern = re.compile(r"^## +(.+?)\s*$", re.MULTILINE)
+    matches = list(pattern.finditer(summary))
+    blocks: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        title = m.group(1).strip()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(summary)
+        body = re.sub(r"(\s*\n\s*-{3,}\s*)+\s*$", "", summary[start:end]).strip()
         if title and body:
             blocks.append((title, body))
     return blocks

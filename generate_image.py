@@ -51,17 +51,23 @@ def _format_date_range(folder_name: str) -> str:
 def _parse_sections(summary: str) -> list[tuple[str, str]]:
     """Split the report into (section_title, section_body) pairs.
 
-    The report format produced by query_all_sections() is:
-        ## Title\\n\\n<body>\\n\\n---\\n\\n## Title\\n\\n<body>…
+    Splits on top-level `## ` markdown headers instead of `---` separators
+    because NotebookLM responses often contain horizontal-rule separators
+    inside a single section's body (e.g. between bullish/bearish/watch
+    subsections of the stocks list). Splitting on `---` would chop one
+    section into many.
     """
-    sections = []
-    for block in summary.split("\n\n---\n\n"):
-        block = block.strip()
-        if not block:
-            continue
-        lines = block.splitlines()
-        title = lines[0].lstrip("#").strip()
-        body = "\n".join(lines[1:]).strip()
+    pattern = re.compile(r"^## +(.+?)\s*$", re.MULTILINE)
+    matches = list(pattern.finditer(summary))
+    sections: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        title = m.group(1).strip()
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(summary)
+        body = summary[body_start:body_end]
+        # Trim trailing query_all_sections separators (`\n\n---\n\n`) so
+        # they don't end up rendered as part of the body.
+        body = re.sub(r"(\s*\n\s*-{3,}\s*)+\s*$", "", body).strip()
         if title and body:
             sections.append((title, body))
     return sections
@@ -306,7 +312,10 @@ def generate(
     results: list[tuple[str | None, Path]] = []
     for idx, (title, body) in enumerate(sections, 1):
         prompt = _build_section_prompt(config, title, body, idx, len(sections), folder_name)
-        slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+        # Keep word characters (incl. CJK) — only strip punctuation/whitespace.
+        slug = re.sub(r"[^\w]+", "_", title, flags=re.UNICODE).strip("_").lower()
+        if not slug:
+            slug = f"section{idx}"
         image_path = report_dir / f"card_{idx}_{slug}.png"
 
         print(f"  [{idx}/{len(sections)}] {title}")
