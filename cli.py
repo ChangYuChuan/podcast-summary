@@ -34,6 +34,12 @@ CRON_MARKER_PREFIX = "# psum:"
 DEFAULT_JOB_NAME   = "default"
 PSUM_CONFIG_DIR    = Path.home() / ".config" / "psum"
 
+KNOWN_KEYS: list[tuple[str, str]] = [
+    ("OPENAI_API_KEY",          "OpenAI API (image generation)"),
+    ("INSTAGRAM_ACCESS_TOKEN",  "Instagram Graph API"),
+    ("EMAIL_SMTP_PASSWORD",     "Email SMTP password"),
+]
+
 
 # ─── Internal helpers ────────────────────────────────────────────────────────
 
@@ -1217,6 +1223,75 @@ def config_set(ctx, args):
                 obj[leaf] = value
     _save_cfg(config_path, cfg)
     click.echo(f"Set {key} = {obj[leaf]}")
+
+
+# ─── key ──────────────────────────────────────────────────────────────────────
+
+@main.group("key", invoke_without_command=True)
+@click.pass_context
+def key_cmd(ctx):
+    """Manage global API keys stored in ~/.zshenv."""
+    if ctx.invoked_subcommand is not None:
+        return
+    # Default action: list all known keys and their status.
+    click.echo("API keys (stored in ~/.zshenv):\n")
+    for var, desc in KNOWN_KEYS:
+        val = os.environ.get(var, "")
+        if val:
+            masked = val[:4] + "…" + val[-4:] if len(val) > 12 else "***"
+            click.echo(f"  ✓  {var}  ({desc})  [{masked}]")
+        else:
+            click.echo(f"  ✗  {var}  ({desc})  [not set]")
+    click.echo(f"\nUse 'psum key set' to add or update a key.")
+
+
+@key_cmd.command("set")
+@click.argument("key_name", required=False, default=None, metavar="[KEY]")
+def key_set(key_name):
+    """Set or update an API key.
+
+    \b
+    Examples:
+      psum key set                      # interactive picker
+      psum key set OPENAI_API_KEY       # set a specific key
+    """
+    valid_names = [k for k, _ in KNOWN_KEYS]
+
+    if key_name:
+        if key_name not in valid_names:
+            click.echo(f"Unknown key: {key_name}")
+            click.echo(f"Known keys: {', '.join(valid_names)}")
+            return
+        chosen_name = key_name
+        chosen_desc = next(d for k, d in KNOWN_KEYS if k == key_name)
+    else:
+        click.echo("Which key do you want to set?\n")
+        for i, (var, desc) in enumerate(KNOWN_KEYS, 1):
+            val = os.environ.get(var, "")
+            status = "set" if val else "not set"
+            click.echo(f"  {i}. {var}  ({desc})  [{status}]")
+        click.echo()
+        choice = click.prompt(
+            "Select key",
+            type=click.IntRange(1, len(KNOWN_KEYS)),
+        )
+        chosen_name, chosen_desc = KNOWN_KEYS[choice - 1]
+
+    current = os.environ.get(chosen_name, "")
+    if current:
+        masked = current[:4] + "…" + current[-4:] if len(current) > 12 else "***"
+        click.echo(f"\n  Current value: {masked}")
+        if not click.confirm("  Update it?", default=True):
+            return
+
+    value = click.prompt(f"\n  {chosen_name}", hide_input=True).strip()
+    if not value:
+        click.echo("  Empty value — skipped.")
+        return
+
+    _write_shell_env_var(chosen_name, value)
+    os.environ[chosen_name] = value
+    click.echo(f"  ✓ {chosen_name} saved to ~/.zshenv")
 
 
 # ─── nlm-login ────────────────────────────────────────────────────────────────

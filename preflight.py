@@ -115,6 +115,13 @@ def check_env_vars(cfg: dict) -> CheckResult:
         for line in result.stdout.splitlines()
         if "=" in line
     }
+    # Inject sourced values into os.environ so downstream checks
+    # (check_openai, check_instagram) can find them via os.environ.get().
+    for name, _ in needed:
+        val = sourced_env.get(name)
+        if val:
+            os.environ[name] = val
+
     missing = [name for name, _ in needed if not sourced_env.get(name)]
     if missing:
         return CheckResult(
