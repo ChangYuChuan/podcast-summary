@@ -295,6 +295,16 @@ psum cron status                          # show all installed psum jobs
 psum cron remove --name default           # remove a job by name
 ```
 
+### Pre-flight check (before a scheduled run)
+
+`psum preflight` runs an offline read-only sanity check on a config: env vars sourced from `~/.zshenv`, NotebookLM auth, OpenAI key, Instagram token expiry, feed reachability, image-hosting endpoints, and pipeline-venv imports. Useful before tomorrow's cron firing to catch expired tokens or broken feeds *before* the pipeline burns 30 minutes only to fail at the last stage.
+
+```bash
+psum preflight [CONFIG]
+```
+
+A single failed check exits non-zero and prints the exact next step (re-source shell, `psum nlm-login`, rotate token, etc.).
+
 ### Editing feeds, recipients, prompts, etc.
 
 Everything is part of the config — there's no separate command to manage individual feeds or recipients. Edit them via `psum init` (interactive wizard) or `psum config set`:

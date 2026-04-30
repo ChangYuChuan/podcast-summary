@@ -8,7 +8,8 @@ Usage:
   psum --help
   psum init                              # Interactive setup wizard
   psum run [CONFIG] [options]            # Run the full pipeline
-  psum publish [CONFIG] --folder X       # Re-publish images + IG from a saved report
+  psum publish [--folder X]              # Re-publish images + IG from a saved report
+  psum preflight [CONFIG]                # Verify the next scheduled run will succeed
   psum cron install/remove/status        # Manage cron jobs
   psum config show/set                   # View/update config values
   psum nlm-login                         # Authenticate with NotebookLM
@@ -797,6 +798,43 @@ def run_cmd(ctx, config_name, skip_fetch, skip_transcribe, skip_report, skip_cle
     if folder:           cmd += ["--folder", folder]
     if notebook_id:      cmd += ["--notebook-id", notebook_id]
 
+    result = subprocess.run(cmd, cwd=str(project_root))
+    sys.exit(result.returncode)
+
+
+# ─── preflight ────────────────────────────────────────────────────────────────
+
+@main.command("preflight")
+@click.argument("config_name", required=False, default=None,
+                metavar="[CONFIG]")
+@click.pass_context
+def preflight_cmd(ctx, config_name):
+    """Pre-flight: verify the next scheduled run will succeed.
+
+    Reads-only: probes env vars, NotebookLM auth, OpenAI key, Instagram token,
+    feed URLs, and image-hosting endpoints. Useful before tomorrow's cron
+    run to catch expired tokens, bad API keys, or broken feeds *before* the
+    pipeline burns 30 minutes only to fail at the last stage.
+
+    \b
+    Examples:
+      psum preflight                      # picker if multiple configs
+      psum preflight daily-ig-stock-report
+    """
+    config_path = _resolve_config(ctx.obj["config"], config_name)
+    cfg = _load_cfg(config_path)
+    project_root = Path(cfg["project_root"]) if cfg.get("project_root") else PROJECT_ROOT
+    python_bin = project_root / "venv" / "bin" / "python3"
+    preflight_py = project_root / "preflight.py"
+
+    if not python_bin.exists():
+        click.echo(f"Error: Pipeline Python not found at {python_bin}", err=True)
+        sys.exit(1)
+    if not preflight_py.exists():
+        click.echo(f"Error: preflight.py not found at {preflight_py}", err=True)
+        sys.exit(1)
+
+    cmd = [str(python_bin), str(preflight_py), "--config", str(config_path)]
     result = subprocess.run(cmd, cwd=str(project_root))
     sys.exit(result.returncode)
 
