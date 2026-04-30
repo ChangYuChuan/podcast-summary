@@ -1037,17 +1037,48 @@ def cron_install(ctx, config_name, schedule, name):
 @cron.command("remove")
 @click.option(
     "--name",
-    default=DEFAULT_JOB_NAME,
-    show_default=True,
-    help="Job name to remove.",
+    default=None,
+    help="Job name to remove. If omitted, picks interactively when multiple psum jobs exist.",
 )
 def cron_remove(name):
-    """Remove a named pipeline cron job."""
+    """Remove a psum cron job.
+
+    With a single psum job installed, removes it directly. With multiple,
+    shows a picker. Pass --name <job> to skip the picker.
+    """
     lines = _get_crontab()
-    idx = _find_cron_idx(lines, name)
-    if idx is None:
-        click.echo(f"No cron job found with name '{name}'.")
+    all_jobs = _find_all_crons(lines)
+
+    if not all_jobs:
+        click.echo("No psum cron jobs installed.")
         return
+
+    if name:
+        # Explicit name — exact match required.
+        idx = _find_cron_idx(lines, name)
+        if idx is None:
+            click.echo(f"No cron job found with name '{name}'.", err=True)
+            click.echo("Available jobs: " + ", ".join(n for _, n in all_jobs), err=True)
+            sys.exit(1)
+    elif len(all_jobs) == 1:
+        idx, name = all_jobs[0]
+        click.echo(f"Removing the only installed psum job: {name}")
+    else:
+        click.echo("Multiple psum cron jobs installed:\n")
+        for i, (line_idx, job_name) in enumerate(all_jobs, 1):
+            click.echo(f"  {i}. {job_name}")
+            click.echo(f"     {lines[line_idx]}")
+        click.echo()
+        choice = click.prompt(
+            "Remove which job?",
+            type=click.IntRange(1, len(all_jobs)),
+        )
+        idx, name = all_jobs[choice - 1]
+
+    if not click.confirm(f"Remove cron job '{name}'?", default=False):
+        click.echo("Aborted.")
+        return
+
     removed = lines.pop(idx)
     _set_crontab(lines)
     click.echo(f"Removed: {removed}")
